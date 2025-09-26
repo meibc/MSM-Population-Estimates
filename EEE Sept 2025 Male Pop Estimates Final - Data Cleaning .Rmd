@@ -1,0 +1,374 @@
+---
+title: "EEE Sept 2025 Male Pop Estimates Final - Data Cleaning"
+output: html_document
+date: "2025-09-24"
+---
+
+```{r}
+# ---- 1. Load libraries ----
+library(tidyverse)
+library(tidycensus)
+library(arrow)
+library(survey)
+library(stringr)
+```
+# NCHS codes for geography alignment
+```{r}
+nchscodes <- read_csv('/Users/meibinchen/Library/CloudStorage/OneDrive-JohnsHopkins/EEE HIV Stigma/EEE Data/Other/GSS and NCHS Data for Marginal Dist/NCHSurb_rural_codes.csv')
+
+nchscodes <- nchscodes %>%
+  mutate(Urbanicity = case_when(
+    CODE2023 == 1 ~ "Large.Central",
+    CODE2023 == 2 ~ "Large.Fringe",
+    CODE2023 %in% c(3, 4) ~ "Medium.Small",
+    CODE2023 %in% c(5, 6) ~ "Nonmetro.Rural",
+    TRUE ~ NA_character_
+  )) %>%
+  mutate(
+    GEOID = paste0(sprintf("%02d", STFIPS), sprintf("%03d", CTYFIPS))
+  ) %>%
+  dplyr::select(CTYNAME, Urbanicity, ST_ABBREV, GEOID)
+
+```
+# Distribution of Males 18+ by Age Group by County
+```{r}
+# read in previously downloaded file for ACS Age-Specific Distributions 
+acs_age_df <- read.csv("/Users/meibinchen/Library/CloudStorage/OneDrive-JohnsHopkins/EEE HIV Stigma/EEE Data/Other/ACS/ACSST5Y2023.S0101-Data.csv")
+
+# Mapping schema: 
+age_cols <- c(
+  "S0101_C03_023E",  # 18-24
+  "S0101_C03_007E", "S0101_C03_008E",  # 25-34
+  "S0101_C03_009E", "S0101_C03_010E",  # 35-44
+  "S0101_C03_011E", "S0101_C03_012E",  # 45-54
+  "S0101_C03_013E", "S0101_C03_014E", "S0101_C03_015E",  # 55+
+  "S0101_C03_016E", "S0101_C03_017E", "S0101_C03_018E", "S0101_C03_019E"
+)
+moe_cols <- c(
+  "S0101_C03_023M",  # 18-24
+  "S0101_C03_007M", "S0101_C03_008M",  # 25-34
+  "S0101_C03_009M", "S0101_C03_010M",  # 35-44
+  "S0101_C03_011M", "S0101_C03_012M",  # 45-54
+  "S0101_C03_013M", "S0101_C03_014M", "S0101_C03_015M",  # 55+
+  "S0101_C03_016M", "S0101_C03_017M", "S0101_C03_018M", "S0101_C03_019M"
+)
+
+# --- Select needed columns (estimates + MOEs) ---
+sub_age_df <- acs_age_df %>%
+  select(GEO_ID, NAME, all_of(age_cols), all_of(moe_cols)) %>%
+  mutate(across(all_of(c(age_cols, moe_cols)), as.numeric))
+
+sub_age_df <- sub_age_df %>%
+  mutate(
+    male_18_24_est     = S0101_C03_023E,
+    male_18_24_moe     = S0101_C03_023M,
+
+    male_25_34_est     = rowSums(cbind(S0101_C03_007E, S0101_C03_008E), na.rm = TRUE),
+    male_25_34_moe     = sqrt(rowSums(cbind(S0101_C03_007M^2, S0101_C03_008M^2), na.rm = TRUE)),
+
+    male_35_44_est     = rowSums(cbind(S0101_C03_009E, S0101_C03_010E), na.rm = TRUE),
+    male_35_44_moe     = sqrt(rowSums(cbind(S0101_C03_009M^2, S0101_C03_010M^2), na.rm = TRUE)),
+
+    male_45_54_est     = rowSums(cbind(S0101_C03_011E, S0101_C03_012E), na.rm = TRUE),
+    male_45_54_moe     = sqrt(rowSums(cbind(S0101_C03_011M^2, S0101_C03_012M^2), na.rm = TRUE)),
+
+    male_55_plus_est   = rowSums(cbind(S0101_C03_013E, S0101_C03_014E, S0101_C03_015E,
+                                       S0101_C03_016E, S0101_C03_017E, S0101_C03_018E, S0101_C03_019E),
+                                 na.rm = TRUE),
+    male_55_plus_moe   = sqrt(rowSums(cbind(S0101_C03_013M^2, S0101_C03_014M^2, S0101_C03_015M^2,
+                                            S0101_C03_016M^2, S0101_C03_017M^2, S0101_C03_018M^2,
+                                            S0101_C03_019M^2), na.rm = TRUE))
+  ) %>%
+  mutate(
+    across(ends_with("_moe"), ~ .x / 1.645, .names = "{.col}_se")
+  )
+
+params_age_acs <- sub_age_df[-c(1,2), ] %>%
+  tidyr::separate(NAME, into = c("County", "State"), sep = ", ", remove = FALSE) %>%
+  dplyr::mutate(ST_ABBREV = state.abb[match(State, state.name)]) %>%
+  dplyr::select(
+    County, State, ST_ABBREV,
+    male_18_24_est, male_25_34_est, male_35_44_est, male_45_54_est, male_55_plus_est,
+    male_18_24_moe_se, male_25_34_moe_se, male_35_44_moe_se, male_45_54_moe_se, male_55_plus_moe_se
+  ) %>%
+  tidyr::pivot_longer(
+    cols = -c(County, State, ST_ABBREV),
+    names_to   = c("prefix","age","stat"),
+    names_pattern = "^(male)_(18_24|25_34|35_44|45_54|55_plus)_(est|moe_se)$",
+    values_to  = "val"
+  ) %>%
+  dplyr::select(-prefix) %>%
+  tidyr::pivot_wider(
+    names_from = stat, values_from = val
+  ) %>%
+  dplyr::mutate(
+    age_group = dplyr::recode(age,
+      "18_24"   = "18-24",
+      "25_34"   = "25-34",
+      "35_44"   = "35-44",
+      "45_54"   = "45-54",
+      "55_plus" = "55+"
+    )
+  ) %>%
+  dplyr::select(County, State, ST_ABBREV, age_group, est, moe_se)
+
+# for missing values 
+params_age_acs <- params_age_acs %>%
+  mutate(moe_se = ifelse(is.na(moe_se), 1e-6, moe_se))
+
+# for mismatch between NCHS and ACS county names
+params_age_acs <- params_age_acs %>%
+  mutate(ST_ABBREV = ifelse(State == 'District of Columbia', 'DC', ST_ABBREV)) %>%
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>%
+  mutate(GEOID = ifelse(County == "Petersburg Borough" & ST_ABBREV == "AK", "02195", GEOID)) %>%
+  mutate(GEOID = ifelse(County == "LaSalle County" & ST_ABBREV == "IL", "17099", GEOID)) %>%
+  mutate(GEOID = ifelse(County == "Doña Ana County" & ST_ABBREV == 'NM', "23027", GEOID)) %>%
+  filter(!(is.na(GEOID)))
+
+```
+# Distributions of Male 18+, Male-Male SSH, Female-Female SSH, SSH, Total Households by County
+```{r}
+# Getting distributions for Male 18+ by County 
+male_vars_18plus <- paste0("B01001_", stringr::str_pad(7:25, width = 3, pad = "0"))
+
+male_age_data <- get_acs(
+  geography = "county",
+  variables = male_vars_18plus,
+  year = 2022,
+  survey = "acs5",
+  cache_table = TRUE
+)
+
+male_18plus_county <- male_age_data %>%
+  group_by(GEOID, NAME) %>%
+  summarise(
+    male_18_plus_est = sum(estimate, na.rm = TRUE),
+    male_18_plus_moe = sqrt(sum(moe^2, na.rm = TRUE)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    male_18_plus_sd = male_18_plus_moe / 1.645
+  )
+
+# Getting distributions for Total Households in County 
+total_county <- get_acs(
+  geography = "county",
+  variables = "B09019_001", # total households
+  year = 2022,
+  survey = "acs5"
+) %>%
+  rename(total_households_est = estimate) %>%
+  select(GEOID, NAME, total_households_est)
+
+# Getting distributions for Male-Male and Female-Female Same-Sex Households in County (ACS 2014)
+mf_counts <- get_acs(
+  geography = "county",
+  variables = c("B11009_003", "B11009_005"),
+  year = 2014,
+  survey = "acs5"
+) %>%
+  select(GEOID, NAME, variable, estimate, moe) %>%
+  pivot_wider(names_from = variable,
+              values_from = c(estimate, moe)) %>%
+  mutate(
+    mm_params = pmap(list(estimate_B11009_003, moe_B11009_003), acs_to_lognorm),
+    ff_params = pmap(list(estimate_B11009_005, moe_B11009_005), acs_to_lognorm)
+  ) %>%
+  unnest_wider(mm_params, names_sep = "_mm") %>%
+  unnest_wider(ff_params, names_sep = "_ff") %>%
+  select(GEOID, estimate_B11009_003, moe_B11009_003, mm_params_mmmu, mm_params_mmsigma,
+         estimate_B11009_005, moe_B11009_005, ff_params_ffmu, ff_params_ffsigma) 
+
+# Get aggregated distributions for Male-Male and Female-Female SSH in County by State-Urbanicity
+mf_state_urb_counts <- mf_counts %>%
+  left_join(nchscodes, by = "GEOID") %>%
+  group_by(ST_ABBREV, Urbanicity) %>%
+  summarise(
+    mm_est = sum(estimate_B11009_003, na.rm = TRUE),
+    mm_moe = sqrt(sum(moe_B11009_003^2, na.rm = TRUE)),
+    ff_est = sum(estimate_B11009_005, na.rm = TRUE),
+    ff_moe = sqrt(sum(moe_B11009_005^2, na.rm = TRUE)), 
+    .groups = "drop") %>%
+  mutate(
+    mm_se = mm_moe / 1.645,
+    ff_se = ff_moe / 1.645
+  ) %>%
+  filter(!is.na(Urbanicity)) 
+
+# Get distributions by Same-Sex Households (ACS 2022)
+ss_households <- get_acs(
+  geography = "county",
+  variables = c("B09019_011", "B09019_013"), # spouse + unmarried partner
+  year = 2022,
+  survey = "acs5"
+) %>%
+  select(GEOID, NAME, variable, estimate, moe) %>%
+  pivot_wider(names_from = variable,
+              values_from = c(estimate, moe)) %>%
+  mutate(
+    ss_est = estimate_B09019_011 + estimate_B09019_013,
+    ss_moe = sqrt(moe_B09019_011^2 + moe_B09019_013^2)
+  ) %>%
+  mutate(
+    ss_params = pmap(list(ss_est, ss_moe), acs_to_lognorm)
+  ) %>%
+  unnest_wider(ss_params, names_sep = "_ss") %>% 
+  select(GEOID, ss_est, ss_moe, ss_params_ssmu, ss_params_sssigma)
+
+# Combine all parameters into one dataframe
+params <- male_18plus_county %>%
+  left_join(total_county, by = "GEOID") %>%
+  left_join(mf_counts, by = "GEOID") %>%
+  left_join(ss_households, by = "GEOID") %>%
+  select(
+    GEOID, NAME.x,
+    male_18_plus_est, male_18_plus_sd,
+    total_households_est, estimate_B11009_003, mm_params_mmmu, mm_params_mmsigma,
+    estimate_B11009_005, ff_params_ffmu, ff_params_ffsigma,
+    ss_est, ss_params_ssmu, ss_params_sssigma
+  ) %>%
+  left_join(nchscodes, by = "GEOID") %>%
+  left_join(
+    mf_state_urb_counts %>%
+      mutate(state_urb_id = row_number()),
+    by = c("ST_ABBREV", "Urbanicity")
+  )
+
+# make sure that NCHScodes only includes GEOIDs in params (no US territories)
+nchscodes <- nchscodes %>% 
+  filter(GEOID %in% params$GEOID)
+
+# make sure that params only include relevant GEOIDs
+params <- params %>% 
+  filter(GEOID %in% nchscodes$GEOID)
+```
+
+# Get GSS Proportions for MSM by Urbanicity
+```{r}
+gss <- read_dta("/Users/meibinchen/Library/CloudStorage/OneDrive-JohnsHopkins/EEE HIV Stigma/EEE Data/Other/GSS Data/gss7224_r1.dta")
+
+# Filter and clean GSS survey data
+gss_prepared <- gss %>% 
+  mutate(wtssnrps = as.numeric(wtssnrps)) %>%
+  mutate(wtssall = as.numeric(wtssall)) %>%
+  mutate(vpsu = as.numeric(vpsu)) %>%
+  mutate(vstrat = as.numeric(vstrat)) %>%
+  mutate(
+    Urbanicity = case_when(
+      xnorcsiz %in% c(1) ~ "Large.Central",
+      xnorcsiz %in% c(3,5) ~ "Large.Fringe",
+      xnorcsiz %in% c(2,4,6,7) ~ "Medium.Small",
+      xnorcsiz %in% c(8,9,10) ~ "Nonmetro.Rural",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  mutate(
+    weights = ifelse(!is.na(wtssnrps), wtssnrps, wtssall), 
+    weights = ifelse(is.na(weights), 0, weights),
+    agecat = case_when(
+      18 <= age & age <= 24 ~ "18-24",
+      25 <= age & age <= 34 ~ "25-34",
+      35 <= age & age <= 44 ~ "35-44",
+      45 <= age & age <= 54 ~ "45-54",
+      age >= 55 ~ "55+",
+      TRUE ~ NA_character_
+    ),
+    racecat = case_when(
+      hispanic %in% c(2,3,4,5) ~ 'hisp',
+      hispanic == 1 & race == 1 ~ 'white', 
+      hispanic == 1 & race == 2 ~ 'black', 
+      hispanic == 1 & race == 3 ~ 'other'
+    ),
+    educat = case_when(
+      degree == 0 ~ 'less_HS',
+      degree == 1 ~ 'HS',
+      degree %in% c(2,3) ~ 'assoc_bach',
+      degree == 4 ~ 'grad'
+    ),
+    incomecat = case_when(
+      income16 %in% c(1:12) ~ '<20K',
+      income16 %in% c(13:17) ~ '20-40K',
+      income16 %in% c(18:22) ~ '40-80K',
+      income16 %in% c(23:26) ~ '80K+'
+    )) %>%
+  mutate(msm = case_when(
+    sex == 1 & sexsex5 %in% c(1,2) ~ 1,
+    sex == 1 & sexsex5 %in% c(3) ~ 0,
+    TRUE ~ NA_real_
+  )) %>%  
+  filter(!is.na(vpsu), !is.na(vstrat), sex == 1, year %in% c(2010, 2012, 2016, 2018, 2020, 2021, 2022, 2024)) 
+  # filter(!is.na(vpsu), !is.na(vstrat), sex == 1) 
+
+# Svydesign adjustment for singular PSU 
+options(survey.lonely.psu = "adjust")
+
+# Create survey design object, needed for appropriate SE calculation with weights
+gss_design <- svydesign(
+  ids = ~vpsu,
+  strata = ~vstrat,
+  weights = ~weights,
+  nest = TRUE,
+  data = gss_prepared
+)
+
+# Proportion MSM by Age Group and Urbanicity
+params_gss_age <- svyby(
+  ~msm,
+  ~agecat + Urbanicity,
+  gss_design,
+  svymean,
+  vartype = c("se", "ci"),
+  na.rm = TRUE
+)
+
+# Proportion MSM by Race and Urbanicity
+params_gss_race <- svyby(
+  ~msm,
+  ~racecat + Urbanicity,
+  gss_design,
+  svymean,
+  vartype = c("se", "ci"),
+  na.rm = TRUE
+)
+
+# Proportion MSM by Income and Urbanicity
+params_gss_income <- svyby(
+  ~msm,
+  ~incomecat + Urbanicity,
+  gss_design,
+  svymean,
+  vartype = c("se", "ci"),
+  na.rm = TRUE
+)
+
+# Proportion MSM by Education and Urbanicity
+params_gss_educ <- svyby(
+  ~msm,
+  ~educat + Urbanicity,
+  gss_design,
+  svymean,
+  vartype = c("se", "ci"),
+  na.rm = TRUE
+)
+
+# Proportion MSM by Urbanicity only
+params_gss <- svyby(
+  ~msm,
+  ~Urbanicity,
+  gss_design,
+  svymean,
+  vartype = c("se", "ci"),
+  na.rm = TRUE
+)
+
+# Nonmetro Rural population of 45-54 years of age has 0 MSM 
+params_gss_age <- params_gss_age %>%
+  mutate(across(everything(), ~ replace(., . == 0, 1e-6))) %>% 
+  as.data.frame()
+```
+
+# Store to read in R
+```{r}
+save(params_gss, params_gss_age, params_gss_race, params_gss_income,
+     params_gss_educ, params, nchscodes, params_age_acs, file = "pop_est_params.RData")
+```
