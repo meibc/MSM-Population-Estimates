@@ -12,9 +12,14 @@ library(arrow)
 library(survey)
 library(stringr)
 ```
+# Set file path
+```{r}
+basepath <- "/Users/meibinchen/Library/CloudStorage/OneDrive-JohnsHopkins/EEE HIV Stigma/EEE Data/Other"
+```
+
 # NCHS codes for geography alignment
 ```{r}
-nchscodes <- read_csv('/Users/meibinchen/Library/CloudStorage/OneDrive-JohnsHopkins/EEE HIV Stigma/EEE Data/Other/GSS and NCHS Data for Marginal Dist/NCHSurb_rural_codes.csv')
+nchscodes <- read_csv(paste0(basepath, "/GSS and NCHS Data for Marginal Dist/NCHSurb_rural_codes.csv"))
 
 nchscodes <- nchscodes %>%
   mutate(Urbanicity = case_when(
@@ -30,10 +35,11 @@ nchscodes <- nchscodes %>%
   dplyr::select(CTYNAME, Urbanicity, ST_ABBREV, GEOID)
 
 ```
-# Distribution of Males 18+ by Age Group by County
+# Distribution of Males 18+ by Demographic Group by County
+### Data Cleaning: Age
 ```{r}
 # read in previously downloaded file for ACS Age-Specific Distributions 
-acs_age_df <- read.csv("/Users/meibinchen/Library/CloudStorage/OneDrive-JohnsHopkins/EEE HIV Stigma/EEE Data/Other/ACS/ACSST5Y2023.S0101-Data.csv")
+acs_age_df <- read_csv(paste0(basepath, "/ACS/ACSST5Y2023.S0101-Data.csv"))
 
 # Mapping schema: 
 age_cols <- c(
@@ -117,15 +123,266 @@ params_age_acs <- params_age_acs %>%
   mutate(moe_se = ifelse(is.na(moe_se), 1e-6, moe_se))
 
 # for mismatch between NCHS and ACS county names
+# params_age_acs <- 
+  
 params_age_acs <- params_age_acs %>%
   mutate(ST_ABBREV = ifelse(State == 'District of Columbia', 'DC', ST_ABBREV)) %>%
   left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>%
   mutate(GEOID = ifelse(County == "Petersburg Borough" & ST_ABBREV == "AK", "02195", GEOID)) %>%
   mutate(GEOID = ifelse(County == "LaSalle County" & ST_ABBREV == "IL", "17099", GEOID)) %>%
-  mutate(GEOID = ifelse(County == "Doña Ana County" & ST_ABBREV == 'NM', "23027", GEOID)) %>%
-  filter(!(is.na(GEOID)))
+  mutate(GEOID = ifelse(County == "Doña Ana County" & ST_ABBREV == 'NM', "23027", GEOID)) %>% 
+  filter(!is.na(GEOID))
 
 ```
+
+### Data Cleaning: Education
+```{r}
+acs_edu_df <- read.csv(paste0(basepath, '/ACS/ACS_EDU_SEX_COUNTY/ACSST5Y2023.S1501-Data.csv'))
+ct_edu_df <- read.csv(paste0(basepath, '/ACS/EDU_CT/ACSST5Y2021.S1501-Data.csv'))
+ct_edu_df <- ct_edu_df[-c(1), ]
+acs_edu_df <- bind_rows(acs_edu_df, ct_edu_df)
+
+# Mapping Schema
+edu_cols <- c(
+  "S1501_C01_007E", "S1501_C01_008E",   # Less than HS
+  "S1501_C01_009E", # HS/GED
+  "S1501_C01_010E", "S1501_C01_011E", "S1501_C01_012E", # college
+  "S1501_C01_013E" # graduate
+)
+
+sub_edu_df <- acs_edu_df%>%
+  select(GEO_ID, NAME, all_of(edu_cols))%>%
+  mutate(across(all_of(edu_cols),as.numeric))
+
+sub_edu_df <- sub_edu_df %>%
+  mutate(
+    less_than_hs = S1501_C01_007E + S1501_C01_008E,
+    hs_ged = S1501_C01_009E,
+    college = S1501_C01_010E + S1501_C01_011E + S1501_C01_012E,
+    graduate = S1501_C01_013E
+  )
+
+sub_edu_df_clean <- sub_edu_df[-c(1), ]
+
+sub_edu_df_clean <- sub_edu_df_clean %>%
+  separate(NAME, into = c("County", "State"), sep = ", ", remove = FALSE)%>%
+  select(County, State, less_than_hs, hs_ged, college, graduate)
+
+sub_edu_df_clean <- sub_edu_df_clean %>%
+  pivot_longer(
+    cols = c("less_than_hs", "hs_ged", "college", "graduate"),
+    names_to = "Edu_Code",
+    values_to = "Count"
+  ) %>%
+  mutate(Education = case_when(
+    Edu_Code == "less_than_hs" ~ "Less HS",
+    Edu_Code == "hs_ged" ~ "HS/GED",
+    Edu_Code == "college" ~ "College",
+    Edu_Code == "graduate" ~ "Graduate",
+    TRUE ~ NA_character_
+  ))
+
+sub_edu_df_clean <- sub_edu_df_clean %>%
+  mutate(ST_ABBREV = state.abb[match(State, state.name)]) %>%
+  select(County, ST_ABBREV, Education, Count)
+
+edu_moe_cols <- c(
+  # MOEs
+  "S1501_C01_007M", "S1501_C01_008M",   # Less than HS
+  "S1501_C01_009M", # HS/GED
+  "S1501_C01_010M", "S1501_C01_011M", "S1501_C01_012M", # college
+  "S1501_C01_013M" # graduate
+)
+# Just include the variables needed, change to numeric
+sub_edu_moe_df <- acs_edu_df%>%
+  select(GEO_ID, NAME, all_of(c(edu_cols,edu_moe_cols)))%>%
+  mutate(across(all_of(c(edu_cols,edu_moe_cols)),as.numeric))
+
+# Calculate the MOEs
+sub_edu_moe_df <- sub_edu_moe_df %>%
+  rowwise() %>%
+  mutate(
+    # 90% MOEs 
+    less_than_hs_moe90  = sqrt(sum(c_across(c(S1501_C01_007M, S1501_C01_008M))^2, na.rm = TRUE)),
+    hs_ged_moe90  = S1501_C01_009M,
+    college_moe90  = sqrt(sum(c_across(c(S1501_C01_010M, S1501_C01_011M, S1501_C01_012M))^2, na.rm = TRUE)),
+    graduate_moe90  = S1501_C01_013M
+  ) %>%
+  ungroup() 
+
+sub_edu_moe_df <- sub_edu_moe_df[-c(1, 2), ]
+# Getting the State and County as two separate columns
+sub_edu_moe_df <- sub_edu_moe_df %>%
+  separate(NAME, into = c("County", "State"), sep = ", ", remove = FALSE) %>%
+  mutate(ST_ABBREV = state.abb[match(State, state.name)]) 
+
+sub_edu_moe_df <- sub_edu_moe_df %>% 
+  pivot_longer(
+    cols = c("less_than_hs_moe90", "hs_ged_moe90", "college_moe90", "graduate_moe90"),
+    names_to = "Edu_Code", 
+    values_to = "MOE") %>% 
+  mutate(Education = case_when(
+    Edu_Code == "less_than_hs_moe90" ~ "Less HS", 
+    Edu_Code == "hs_ged_moe90" ~ "HS/GED", 
+    Edu_Code == "college_moe90" ~ "College", 
+    Edu_Code == "graduate_moe90" ~ "Graduate",
+    TRUE ~ NA_character_ ))%>%
+  select(County, ST_ABBREV, Education, MOE)
+
+sub_edu_df_clean <- sub_edu_df_clean %>%
+  left_join(sub_edu_moe_df,
+            by = c("County", "ST_ABBREV", "Education")) %>%
+  mutate(
+    Count = as.numeric(Count),
+    Stat  = as.numeric(MOE),
+    low90  = pmax(0, Count - Stat),
+    high90 = Count + Stat
+  )
+
+
+# Write the formatted table as a csv file
+# write.csv(sub_edu_df_clean, "sub_edu_df_clean.csv", row.names = FALSE)
+```
+
+### Data Cleaning: Household Income
+```{r}
+acs_income_df <- read.csv(paste0(basepath, '/ACS/ACS_INCOME_SEX_COUNTY/ACSDT5Y2023.B19001-Data.csv'))
+ct_income_df <- read.csv(paste0(basepath, '/ACS/INCOME_CT/ACSDT5YSPT2021.B19001-Data.csv'))
+ct_income_df <- ct_income_df[-c(1), ]
+acs_income_df <- bind_rows(acs_income_df, ct_income_df)
+
+income_cols <- c(
+  "B19001_002E", "B19001_003E", "B19001_004E",   # Less than 20K
+  "B19001_005E", "B19001_006E", "B19001_007E", "B19001_008E", # 20K-40K
+  "B19001_009E", "B19001_010E", "B19001_011E", "B19001_012E", "B19001_013E", # 40K-100K
+  "B19001_014E", "B19001_015E", "B19001_016E", "B19001_017E"# 100K+
+)
+
+sub_income_df <- acs_income_df%>%
+  select(GEO_ID, NAME, all_of(income_cols))%>%
+  mutate(across(all_of(income_cols),as.numeric))
+
+sub_income_df <- sub_income_df %>%
+  mutate(
+    income_under_20k = B19001_002E + B19001_003E + B19001_004E,
+    income_20k_40k = B19001_005E + B19001_006E + B19001_007E + B19001_008E,
+    income_40k_90k = B19001_009E + B19001_010E + B19001_011E + B19001_012E + B19001_013E,
+    income_above_90k = B19001_014E + B19001_015E + B19001_016E + B19001_017E
+  )
+
+sub_income_df_clean <- sub_income_df[-c(1), ]
+
+sub_income_df_clean <- sub_income_df_clean %>%
+  separate(NAME, into = c("County", "State"), sep = ", ", remove = FALSE)%>%
+  select(County, State, income_under_20k, income_20k_40k, income_40k_90k, income_above_90k)
+
+sub_income_df_clean <- sub_income_df_clean %>%
+  pivot_longer(
+    cols = c("income_under_20k", "income_20k_40k", "income_40k_90k", "income_above_90k"),
+    names_to = "Income_code",
+    values_to = "Count"
+  ) %>%
+  mutate(Income = case_when(
+    Income_code == "income_under_20k" ~ "<20K",
+    Income_code == "income_20k_40k" ~ "[20K, 40K)",
+    Income_code == "income_40k_90k" ~ "[40K, 90K)",
+    Income_code == "income_above_90k" ~ "[90K, infty)",
+    TRUE ~ NA_character_
+  ))
+
+sub_income_df_clean <- sub_income_df_clean %>%
+  mutate(ST_ABBREV = state.abb[match(State, state.name)]) %>%
+  select(County, ST_ABBREV, Income, Count)
+
+income_moe_cols <- c(
+  "B19001_002M", "B19001_003M", "B19001_004M",   # Less than 20K
+  "B19001_005M", "B19001_006M", "B19001_007M", "B19001_008M", # 20K-40K
+  "B19001_009M", "B19001_010M", "B19001_011M", "B19001_012M", "B19001_013M", # 40K-100K
+  "B19001_014M", "B19001_015M", "B19001_016M", "B19001_017M"# 100K+
+)
+
+sub_income_moe_df <- acs_income_df%>%
+  select(GEO_ID, NAME, all_of(income_moe_cols))%>%
+  mutate(across(all_of(income_moe_cols),as.numeric))
+
+# Calculate the MOEs
+sub_income_moe_df <- sub_income_moe_df %>%
+  mutate(
+    income_under_20k = sqrt(sum(c_across(c(B19001_002M, B19001_003M, B19001_004M))^2, na.rm = TRUE)),
+    income_20k_40k = sqrt(sum(c_across(c(B19001_005M, B19001_006M, B19001_007M, B19001_008M))^2, na.rm = TRUE)),
+    income_40k_90k = sqrt(sum(c_across(c(B19001_009M, B19001_010M, B19001_011M, B19001_012M, B19001_013M))^2, na.rm = TRUE)),
+    income_above_90k = sqrt(sum(c_across(c(B19001_014M, B19001_015M, B19001_016M, B19001_017M))^2, na.rm = TRUE))
+  )
+sub_income_moe_df <- sub_income_moe_df[-c(1), ]
+
+sub_income_moe_df <- sub_income_moe_df %>%
+  separate(NAME, into = c("County", "State"), sep = ", ", remove = FALSE)%>%
+  select(County, State, income_under_20k, income_20k_40k, income_40k_90k, income_above_90k)
+
+sub_income_moe_df <- sub_income_moe_df %>%
+  pivot_longer(
+    cols = c("income_under_20k", "income_20k_40k", "income_40k_90k", "income_above_90k"),
+    names_to = "Income_code",
+    values_to = "MOE"
+  ) %>%
+  mutate(Income = case_when(
+    Income_code == "income_under_20k" ~ "<20K",
+    Income_code == "income_20k_40k" ~ "[20K, 40K)",
+    Income_code == "income_40k_90k" ~ "[40K, 90K)",
+    Income_code == "income_above_90k" ~ "[90K, infty)",
+    TRUE ~ NA_character_
+  ))
+
+sub_income_moe_df <- sub_income_moe_df %>%
+  mutate(ST_ABBREV = state.abb[match(State, state.name)]) %>%
+  select(County, ST_ABBREV, Income, MOE)
+
+# Write the formatted table as a csv file
+# write.csv(sub_income_df_clean, "sub_income_df_clean.csv", row.names = FALSE)
+```
+# Create overall params demographics dataframe
+```{r}
+params_age_acs <- params_age_acs %>% 
+  rename(factor_lev = age_group) %>% 
+  mutate(Category = "Age") 
+
+params_edu_acs <- sub_edu_df_clean %>% 
+  select(County, ST_ABBREV, Education, Count, MOE) %>% 
+  mutate(Category = "Education", moe_se = MOE / 1.645) %>% 
+  rename(est = Count, factor_lev = Education) 
+
+params_income_acs <- sub_income_df_clean %>%
+  left_join(sub_income_moe_df, by = c("County", "ST_ABBREV", "Income")) %>%
+  rename(factor_lev = Income, est = Count) %>% 
+  mutate(Category = "Income", moe_se = MOE / 1.645) 
+
+params_income_acs <- params_income_acs %>%
+  mutate(ST_ABBREV = ifelse(County == 'District of Columbia', 'DC', ST_ABBREV)) %>%
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>%
+  mutate(GEOID = ifelse(County == "Petersburg Borough" & ST_ABBREV == "AK", "02195", GEOID)) %>%
+  mutate(GEOID = ifelse(County == "LaSalle County" & ST_ABBREV == "IL", "17099", GEOID)) %>%
+  mutate(GEOID = ifelse(County == "Doña Ana County" & ST_ABBREV == 'NM', "23027", GEOID)) %>% 
+  filter(!ST_ABBREV %in% c('PR')) %>%
+  filter(!is.na(GEOID)) %>%
+  filter(!(ST_ABBREV == "CT" & str_detect(County, "County")))
+
+params_edu_acs <- params_edu_acs %>%
+  mutate(ST_ABBREV = ifelse(County == 'District of Columbia', 'DC', ST_ABBREV)) %>%
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>%
+  mutate(GEOID = ifelse(County == "Petersburg Borough" & ST_ABBREV == "AK", "02195", GEOID)) %>%
+  mutate(GEOID = ifelse(County == "LaSalle County" & ST_ABBREV == "IL", "17099", GEOID)) %>%
+  mutate(GEOID = ifelse(County == "Doña Ana County" & ST_ABBREV == 'NM', "23027", GEOID)) %>% 
+  filter(!ST_ABBREV %in% c('PR')) %>%
+  filter(!is.na(GEOID)) %>%
+  filter(!(ST_ABBREV == "CT" & str_detect(County, "County")))
+
+params_acs_dem <- params_age_acs %>% 
+  bind_rows(params_edu_acs) %>%
+  bind_rows(params_income_acs) 
+
+```
+
+
 # Distributions of Male 18+, Male-Male SSH, Female-Female SSH, SSH, Total Households by County
 ```{r}
 # Getting distributions for Male 18+ by County 
@@ -370,5 +627,5 @@ params_gss_age <- params_gss_age %>%
 # Store to read in R
 ```{r}
 save(params_gss, params_gss_age, params_gss_race, params_gss_income,
-     params_gss_educ, params, nchscodes, params_age_acs, file = "pop_est_params.RData")
+     params_gss_educ, params, nchscodes, params_acs_dem, file = "pop_est_params.RData")
 ```
