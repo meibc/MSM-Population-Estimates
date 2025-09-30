@@ -11,6 +11,7 @@ library(tidycensus)
 library(arrow)
 library(survey)
 library(stringr)
+library(haven)
 ```
 # Set file path
 ```{r}
@@ -124,14 +125,6 @@ params_age_acs <- params_age_acs %>%
 
 # for mismatch between NCHS and ACS county names
 # params_age_acs <- 
-  
-params_age_acs <- params_age_acs %>%
-  mutate(ST_ABBREV = ifelse(State == 'District of Columbia', 'DC', ST_ABBREV)) %>%
-  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>%
-  mutate(GEOID = ifelse(County == "Petersburg Borough" & ST_ABBREV == "AK", "02195", GEOID)) %>%
-  mutate(GEOID = ifelse(County == "LaSalle County" & ST_ABBREV == "IL", "17099", GEOID)) %>%
-  mutate(GEOID = ifelse(County == "Doña Ana County" & ST_ABBREV == 'NM', "23027", GEOID)) %>% 
-  filter(!is.na(GEOID))
 
 ```
 
@@ -349,37 +342,55 @@ params_age_acs <- params_age_acs %>%
 params_edu_acs <- sub_edu_df_clean %>% 
   select(County, ST_ABBREV, Education, Count, MOE) %>% 
   mutate(Category = "Education", moe_se = MOE / 1.645) %>% 
-  rename(est = Count, factor_lev = Education) 
+  rename(est = Count, factor_lev = Education) %>%
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV"))
 
 params_income_acs <- sub_income_df_clean %>%
   left_join(sub_income_moe_df, by = c("County", "ST_ABBREV", "Income")) %>%
   rename(factor_lev = Income, est = Count) %>% 
-  mutate(Category = "Income", moe_se = MOE / 1.645) 
+  mutate(Category = "Income", moe_se = MOE / 1.645) %>%
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) 
 
-params_income_acs <- params_income_acs %>%
-  mutate(ST_ABBREV = ifelse(County == 'District of Columbia', 'DC', ST_ABBREV)) %>%
-  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>%
-  mutate(GEOID = ifelse(County == "Petersburg Borough" & ST_ABBREV == "AK", "02195", GEOID)) %>%
-  mutate(GEOID = ifelse(County == "LaSalle County" & ST_ABBREV == "IL", "17099", GEOID)) %>%
-  mutate(GEOID = ifelse(County == "Doña Ana County" & ST_ABBREV == 'NM', "23027", GEOID)) %>% 
-  filter(!ST_ABBREV %in% c('PR')) %>%
-  filter(!is.na(GEOID)) %>%
-  filter(!(ST_ABBREV == "CT" & str_detect(County, "County")))
-
-params_edu_acs <- params_edu_acs %>%
-  mutate(ST_ABBREV = ifelse(County == 'District of Columbia', 'DC', ST_ABBREV)) %>%
-  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>%
-  mutate(GEOID = ifelse(County == "Petersburg Borough" & ST_ABBREV == "AK", "02195", GEOID)) %>%
-  mutate(GEOID = ifelse(County == "LaSalle County" & ST_ABBREV == "IL", "17099", GEOID)) %>%
-  mutate(GEOID = ifelse(County == "Doña Ana County" & ST_ABBREV == 'NM', "23027", GEOID)) %>% 
-  filter(!ST_ABBREV %in% c('PR')) %>%
-  filter(!is.na(GEOID)) %>%
-  filter(!(ST_ABBREV == "CT" & str_detect(County, "County")))
+params_age_acs <- params_age_acs %>%
+  mutate(ST_ABBREV = ifelse(State == 'District of Columbia', 'DC', ST_ABBREV)) 
 
 params_acs_dem <- params_age_acs %>% 
   bind_rows(params_edu_acs) %>%
-  bind_rows(params_income_acs) 
-
+  bind_rows(params_income_acs) %>% 
+  filter(
+    !(ST_ABBREV == "CT" & str_detect(County, "County")),
+    !ST_ABBREV %in% c("PR"),
+    !str_detect(County, "Municipio")
+  ) %>%
+  mutate(
+    # Fix missing or incorrect state abbreviations
+    ST_ABBREV = case_when(
+      is.na(ST_ABBREV) & County == "Petersburg Borough" ~ "AK",
+      is.na(ST_ABBREV) & County == "LaSalle County"     ~ "IL",
+      is.na(ST_ABBREV) & County == "Doña Ana County"    ~ "NM",
+      State == "District of Columbia"                   ~ "DC",
+      County == "District of Columbia"                  ~ "DC",
+      TRUE ~ ST_ABBREV
+    ),
+    
+    # Fix GEOID and Urbanicity overrides
+    GEOID = case_when(
+      County == "Petersburg Borough" & ST_ABBREV == "AK" ~ "02195",
+      County == "LaSalle County"     & ST_ABBREV == "IL" ~ "17099",
+      County == "Doña Ana County"    & ST_ABBREV == "NM" ~ "35013",
+      County == 'District of Columbia' ~ "11001",
+      TRUE ~ GEOID
+    ),
+    Urbanicity = case_when(
+      GEOID == "02195" ~ "Nonmetro.Rural",
+      GEOID == "17099" ~ "Nonmetro.Rural",
+      GEOID == "35013" ~ "Medium.Small",
+      GEOID == "11001" ~ "Large.Central",
+      TRUE ~ Urbanicity
+    )
+  ) %>%
+  mutate(moe_se = ifelse(is.na(moe_se), 1e-6, moe_se)) 
+  
 ```
 
 
@@ -622,10 +633,40 @@ params_gss <- svyby(
 params_gss_age <- params_gss_age %>%
   mutate(across(everything(), ~ replace(., . == 0, 1e-6))) %>% 
   as.data.frame()
+
+params_gss_age <- params_gss_age %>% 
+  mutate(Category = 'agecat') %>%
+  rename(factor_lev = agecat)
+
+params_gss_educ <- params_gss_educ %>% 
+  mutate(educat = 
+           case_when(
+             educat == "less_HS" ~ "Less HS",
+             educat == "HS" ~ "HS/GED",
+             educat == "assoc_bach" ~ "College",
+             educat == "grad" ~ "Graduate"
+           )) %>%
+  mutate(Category = 'educat') %>%
+  rename(factor_lev = educat)
+
+params_gss_income <- params_gss_income %>% 
+  mutate(incomecat = 
+           case_when(
+             incomecat == "<20K" ~ "<20K",
+             incomecat == "20-40K" ~ "[20K, 40K)",
+             incomecat == "40-80K" ~ "[40K, 90K)",
+             incomecat == "80K+" ~ "[90K, infty)"
+           )) %>%
+  mutate(Category = 'inccat') %>%
+  rename(factor_lev = incomecat)
+
+params_gss_dem <- params_gss_age %>%
+  bind_rows(params_gss_educ) %>%
+  bind_rows(params_gss_income) 
+
 ```
 
 # Store to read in R
 ```{r}
-save(params_gss, params_gss_age, params_gss_race, params_gss_income,
-     params_gss_educ, params, nchscodes, params_acs_dem, file = "pop_est_params.RData")
+save(params_gss, params_gss_dem, params, nchscodes, params_acs_dem, file = "pop_est_params.RData")
 ```

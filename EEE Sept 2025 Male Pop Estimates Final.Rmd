@@ -93,23 +93,22 @@ dem_config <- list(
   age = list(
     n       = n_age,
     levels  = ages,
-    params  = params_gss_age,
+    params  = params_gss_dem %>% filter(Category == "agecat"),
     varname = "agecat"
   ),
   educ = list(
     n       = n_educ,
     levels  = educs,     # not educ_levels
-    params  = params_gss_educ,
+    params  = params_gss_dem %>% filter(Category == "educat"),
     varname = "educat"
   ),
   income = list(
     n       = n_income,
     levels  = incomes,   # not income_levels
-    params  = params_gss_income,
+    params  = params_gss_dem %>% filter(Category == "inccat"),
     varname = "inccat"
   )
 )
-
 
 # Output directory
 dir.create("msm_draws", showWarnings = FALSE)
@@ -131,42 +130,44 @@ for (j in seq(1L, n_sim, by = n_chunk)) {
   )
   save_path <- file.path("male_draws", paste0("male_blk_", chunk_id, ".parquet"))
   arrow::write_parquet(as.data.frame(male_blk), save_path)
-  # --- Males 18+ by Age Group ---
-  male_age_blk <- array(NA_real_, dim = c(n_age, nC, m))
-  
-  for (a in 1:n_age) {
-    means_male_age <- params_acs_dem %>%
-      filter(Category == "Age", factor_lev == ages[a]) %>%
-      pull(est)
-    
-    sd_male_age <- params_acs_dem %>%
-      filter(Category == "Age", factor_lev == ages[a]) %>%
-      pull(moe_se)
-    
-    male_age_blk[a,,] <- matrix(
-      rnorm(nC * m, mean = means_male_age, sd = sd_male_age),
-      nrow = nC, ncol = m
-    )
-  }
-  
-  male_age_df <- as.data.frame.table(male_age_blk, responseName = "male_pop") %>%
-    rename(age_group = Var1, county_index = Var2, sim_index = Var3) %>%
-    mutate(
-      age_group = as.integer(age_group),
-      county_index = as.integer(county_index),
-      sim_index = as.integer(sim_index)
-    )
-  
-  arrow::write_parquet(
-    male_age_df,
-    file.path("male_draws", paste0("adj_male_age_blk", chunk_id, ".parquet"))
+# --- Males 18+ by Age Group ---
+male_age_blk <- array(NA_real_, dim = c(n_age, nC, m))
+
+for (a in 1:n_age) {
+  means_male_age <- params_acs_dem %>%
+    filter(Category == "Age", factor_lev == ages[a]) %>%
+    pull(est)
+
+  sd_male_age <- params_acs_dem %>%
+    filter(Category == "Age", factor_lev == ages[a]) %>%
+    pull(moe_se)
+
+  male_age_blk[a,,] <- matrix(
+    rnorm(nC * m, mean = means_male_age, sd = sd_male_age),
+    nrow = nC, ncol = m
   )
-  
+}
+
+male_age_df <- as.data.frame.table(male_age_blk, responseName = "male_pop") %>%
+  rename(age_group = Var1, county_index = Var2, sim_index = Var3) %>%
+  mutate(
+    age_group = as.integer(age_group),
+    county_index = as.integer(county_index),
+    sim_index = as.integer(sim_index)
+  )
+
+arrow::write_parquet(
+  male_age_df,
+  file.path("male_draws", paste0("adj_male_age_blk", chunk_id, ".parquet"))
+)
+
   # --- Males 18+ by Education ---
   male_educ_blk <- array(NA_real_, dim = c(n_educ, nC, m))
   for (a in 1:n_educ) {
-    means_male_educ <- params_acs_dem %>% filter(Category == "Education", factor_lev == educs[a]) %>% pull(est)
-    sd_male_educ <- params_acs_dem %>% filter(Category == "Education", factor_lev == educs[a]) %>% pull(moe_se)
+    means_male_educ <- params_acs_dem %>% 
+      filter(Category == "Education", factor_lev == educs[a]) %>% pull(est)
+    sd_male_educ <- params_acs_dem %>% 
+      filter(Category == "Education", factor_lev == educs[a]) %>% pull(moe_se)
     male_educ_blk[a,,] <- matrix(
       rnorm(nC * m, mean = means_male_educ, sd = sd_male_educ),
       nrow = nC, ncol = m
@@ -184,8 +185,10 @@ for (j in seq(1L, n_sim, by = n_chunk)) {
   # --- Males 18+ by Income ---
   male_income_blk <- array(NA_real_, dim = c(n_income, nC, m))
   for (a in 1:n_income) {
-    means_male_income <- params_acs_dem %>% filter(Category == "Income", factor_lev == incomes[a]) %>% pull(est)
-    sd_male_income <- params_acs_dem %>% filter(Category == "Income", factor_lev == incomes[a]) %>% pull(moe_se)
+    means_male_income <- params_acs_dem %>% 
+      filter(Category == "Income", factor_lev == incomes[a]) %>% pull(est)
+    sd_male_income <- params_acs_dem %>% 
+      filter(Category == "Income", factor_lev == incomes[a]) %>% pull(moe_se)
     male_income_blk[a,,] <- matrix(
       rnorm(nC * m, mean = means_male_income, sd = sd_male_income),
       nrow = nC, ncol = m
@@ -318,8 +321,9 @@ f_dem_sim <- function(dem = c("age", "educ", "income")) {
     gss_dem_blk <- array(NA_real_, dim = c(n_dem, n_urb, m))
     for (d in seq_len(n_dem)) {
       for (u in seq_len(n_urb)) {
-        row <- params[params[[dem_var]] == levels[d] &
-                        params$Urbanicity == urb_levels[u], ]
+        row <- params_gss_dem[params_gss_dem$Category == dem_var & 
+                 params_gss_dem$factor_lev == levels[d] & 
+                 params_gss_dem$Urbanicity == urb_levels[u], ]
         gss_dem_blk[d, u, ] <- sim_logitnormal_vec(row$msm, row$se, m)
       }
     }
@@ -338,7 +342,7 @@ f_dem_sim <- function(dem = c("age", "educ", "income")) {
     prop_msm_blk <- msm_dem_blk / pred_msm_county_expanded
     msm_blk_expanded <- array(rep(msm_blk, each = n_dem), dim = c(n_dem, nC, m))
     
-    print(sum(prop_msm_blk[,1,1]))
+    print(sum(prop_msm_blk[,1,1], na.rm=TRUE))
     
     adj_msm_dem_blk <- prop_msm_blk * msm_blk_expanded
     
@@ -361,6 +365,44 @@ f_dem_sim <- function(dem = c("age", "educ", "income")) {
 }
 
 f_dem_sim('educ')
+
+
+# msm_blk_filepath  <- file.path("msm_draws",  paste0("msm_blk_", chunk_id, ".parquet"))
+# msm_blk      <- as.matrix(arrow::read_parquet(msm_blk_filepath))
+# male_dem_filepath <- file.path("male_draws", paste0("adj_male_", 'educ', "_blk", chunk_id, ".parquet"))
+# male_dem_blk <- as.matrix(arrow::read_parquet(male_dem_filepath))
+# 
+# gss_dem_blk <- array(NA_real_, dim = c(n_dem, n_urb, m))
+# for (d in seq_len(n_dem)) {
+#   for (u in seq_len(n_urb)) {
+#     row <- params[params[[dem_var]] == levels[d] &
+#                     params$Urbanicity == urb_levels[u], ]
+#     gss_dem_blk[d, u, ] <- sim_logitnormal_vec(row$msm, row$se, m)
+#   }
+# }
+# 
+#     gss_dem_blk <- array(NA_real_, dim = c(n_dem, n_urb, m))
+#     for (d in seq_len(n_dem)) {
+#       for (u in seq_len(n_urb)) {
+#         params_gss_dem[params_gss_dem$Category == dem_var & 
+#                  params_gss_dem$factor_lev == levels[d] & 
+#                  params_gss_dem$Urbanicity == urb_levels[u], ]
+#         gss_dem_blk[d, u, ] <- sim_logitnormal_vec(row$msm, row$se, m)
+#       }
+#     }
+#     
+#     for (d in seq_len(n_dem)) {
+#       for (u in seq_len(n_urb)) {
+#         params_gss_dem[params_gss_dem$Category == dem_var & 
+#                          params_gss_dem$factor_lev == levels[d] & 
+#                          params_gss_dem$Urbanicity == urb_levels[u], ]
+#         gss_dem_blk[d, u, ] <- sim_logitnormal_vec(row$msm, row$se, m)
+#       }
+#     }
+
+print(sum(prop_msm_blk[,1,1], na.rm=TRUE))
+
+prop_msm_blk[,1,1]
 ```
 
 ```{r}
