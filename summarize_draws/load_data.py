@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from glob import glob
 
+
 def load_sim_matrix(parquet_dir, prefix="msm_blk"):
     """Loads MSM or male matrix from individual parquet files."""
     files = sorted(glob(f"{parquet_dir}/{prefix}_*.parquet"))
