@@ -7,9 +7,8 @@ params:
 simulations: 100000
 chunk_size: 5000
 ---
-
+# Load libraries
 ```{r}
-# ---- 1. Load libraries ----
 library(tidyverse)
 library(tidycensus)
 library(arrow)
@@ -17,28 +16,34 @@ library(survey)
 library(stringr)
 ```
 
+# Load parameter data
 ```{r}
 # ---- 2. Load parameter data ----
 load('pop_est_params.RData')
 ```
 
+# Helper functions
 ```{r}
-# ---- 3. Helper functions ----
 logit     <- function(p) log(p/(1-p))
 inv_logit <- function(x) 1/(1+exp(-x))
 
 sim_logitnormal_vec <- function(p_vec, se_vec, n_draws) {
-  # p_vec, se_vec are length K; returns K × n_draws matrix
   mu  <- logit(p_vec)
-  sel <- se_vec / (p_vec*(1-p_vec))
+  sel <- se_vec / (p_vec * (1 - p_vec))
   out <- matrix(NA_real_, nrow = length(p_vec), ncol = n_draws)
+  
   for (k in seq_along(p_vec)) {
-    out[k, ] <- inv_logit(rnorm(n_draws, mu[k], sel[k]))
+    draws <- inv_logit(rnorm(n_draws, mu[k], sel[k]))
+    # Clamp to [0, 1]
+    draws[draws < 0] <- 0
+    draws[draws > 1] <- 1
+    out[k, ] <- draws
   }
   out
 }
 ```
 
+# Set up parameters
 ```{r}
 set.seed(123)
 n_sim <- 100000L
@@ -79,6 +84,7 @@ incomes <- params_acs_dem %>%
   filter(Category == "Income") %>% 
   pull(factor_lev) %>% 
   unique()
+
 urb_levels <- c("Large.Central", "Large.Fringe", "Medium.Small", "Nonmetro.Rural")
 
 params_county <- params %>% 
@@ -113,8 +119,8 @@ dem_config <- list(
 # Output directory
 dir.create("msm_draws", showWarnings = FALSE)
 dir.create("male_draws", showWarnings = FALSE)
-
 ```
+
 # Male Population Simulation by County, Demographics
 ```{r}
 for (j in seq(1L, n_sim, by = n_chunk)) {
@@ -122,45 +128,50 @@ for (j in seq(1L, n_sim, by = n_chunk)) {
   m   <- length(idx)
   chunk_id <- paste0(idx[1], "_", idx[m])
   message("Processing draws ", idx[1], " – ", idx[m])
-
+  
   # --- Males 18+ ---
   male_blk <- matrix(
     rnorm(nC * m, mean = params_county$male_18_plus_est, sd = params_county$male_18_plus_sd),
     nrow = nC, ncol = m
   )
+  
+  male_blk[male_blk < 0] = 0
+  
   save_path <- file.path("male_draws", paste0("male_blk_", chunk_id, ".parquet"))
   arrow::write_parquet(as.data.frame(male_blk), save_path)
-# --- Males 18+ by Age Group ---
-male_age_blk <- array(NA_real_, dim = c(n_age, nC, m))
-
-for (a in 1:n_age) {
-  means_male_age <- params_acs_dem %>%
-    filter(Category == "Age", factor_lev == ages[a]) %>%
-    pull(est)
-
-  sd_male_age <- params_acs_dem %>%
-    filter(Category == "Age", factor_lev == ages[a]) %>%
-    pull(moe_se)
-
-  male_age_blk[a,,] <- matrix(
-    rnorm(nC * m, mean = means_male_age, sd = sd_male_age),
-    nrow = nC, ncol = m
+  # --- Males 18+ by Age Group ---
+  male_age_blk <- array(NA_real_, dim = c(n_age, nC, m))
+  
+  for (a in 1:n_age) {
+    means_male_age <- params_acs_dem %>%
+      filter(Category == "Age", factor_lev == ages[a]) %>%
+      pull(est)
+    
+    sd_male_age <- params_acs_dem %>%
+      filter(Category == "Age", factor_lev == ages[a]) %>%
+      pull(moe_se)
+    
+    male_age_blk[a,,] <- matrix(
+      rnorm(nC * m, mean = means_male_age, sd = sd_male_age),
+      nrow = nC, ncol = m
+    )
+  }
+  
+  male_age_blk[male_age_blk < 0] <- 0
+  
+  male_age_df <- as.data.frame.table(male_age_blk, responseName = "male_pop") %>%
+    rename(age = Var1, county_index = Var2, sim_index = Var3) %>%
+    mutate(
+      age = as.integer(age),
+      county_index = as.integer(county_index),
+      sim_index = as.integer(sim_index)
+    )
+  
+  arrow::write_parquet(
+    male_age_df,
+    file.path("male_draws", paste0("adj_male_age_blk", chunk_id, ".parquet"))
   )
-}
-
-male_age_df <- as.data.frame.table(male_age_blk, responseName = "male_pop") %>%
-  rename(age_group = Var1, county_index = Var2, sim_index = Var3) %>%
-  mutate(
-    age_group = as.integer(age_group),
-    county_index = as.integer(county_index),
-    sim_index = as.integer(sim_index)
-  )
-
-arrow::write_parquet(
-  male_age_df,
-  file.path("male_draws", paste0("adj_male_age_blk", chunk_id, ".parquet"))
-)
-
+  
   # --- Males 18+ by Education ---
   male_educ_blk <- array(NA_real_, dim = c(n_educ, nC, m))
   for (a in 1:n_educ) {
@@ -173,15 +184,18 @@ arrow::write_parquet(
       nrow = nC, ncol = m
     )
   }
+  
+  male_educ_blk[male_educ_blk < 0] = 0
+  
   male_educ_df <- as.data.frame.table(male_educ_blk, responseName = "male_pop") %>%
-    rename(educ_group = Var1, county_index = Var2, sim_index = Var3)
+    rename(educ = Var1, county_index = Var2, sim_index = Var3)
   male_educ_df <- male_educ_df %>% mutate(
-    educ_group = as.integer(educ_group),
+    educ = as.integer(educ),
     county_index = as.integer(county_index),
     sim_index = as.integer(sim_index)
   )
   arrow::write_parquet(male_educ_df, file.path("male_draws", paste0("adj_male_educ_blk", chunk_id, ".parquet")))
-
+  
   # --- Males 18+ by Income ---
   male_income_blk <- array(NA_real_, dim = c(n_income, nC, m))
   for (a in 1:n_income) {
@@ -194,20 +208,24 @@ arrow::write_parquet(
       nrow = nC, ncol = m
     )
   }
+  
+  male_income_blk[male_income_blk < 0] = 0
+  
   male_income_df <- as.data.frame.table(male_income_blk, responseName = "male_pop") %>%
-    rename(income_group = Var1, county_index = Var2, sim_index = Var3)
+    rename(income = Var1, county_index = Var2, sim_index = Var3)
   male_income_df <- male_income_df %>% mutate(
-    income_group = as.integer(income_group),
+    income = as.integer(income),
     county_index = as.integer(county_index),
     sim_index = as.integer(sim_index)
   )
   arrow::write_parquet(male_income_df, file.path("male_draws", paste0("adj_male_income_blk", chunk_id, ".parquet")))
-
+  
   # Cleanup
   rm(male_age_blk, male_age_df, male_blk, male_educ_blk, male_educ_df, male_income_blk, male_income_df)
   gc()
 }
 ```
+
 # MSM Population by County
 ```{r}
 # Loop over chunks
@@ -240,6 +258,9 @@ for (j in seq(1L, n_sim, by = n_chunk)) {
           sd   = params_county$ff_se),
     nrow = nC, ncol = m
   )
+  
+  mm_block[mm_block < 0] <- 0
+  ff_block[ff_block < 0] <- 0
   
   m_f_ratio <- mm_block / (mm_block + ff_block)
   ssm_block <- m_f_ratio * ss_block
@@ -274,6 +295,7 @@ for (j in seq(1L, n_sim, by = n_chunk)) {
   
   # --- Final MSM draw ---
   msm_blk <- male_blk * msm_index_blk * gss_blk_by_cty  # nC x m
+  msm_blk[msm_blk < 0] <- 0
   
   # --- Save ---
   save_path <- file.path("msm_draws", paste0("msm_blk_", chunk_id, ".parquet"))
@@ -289,6 +311,7 @@ for (j in seq(1L, n_sim, by = n_chunk)) {
 }
 ```
 
+# Function for demographic-specific MSM Simulations
 ```{r}
 f_dem_sim <- function(dem = c("age", "educ", "income")) {
   dem <- match.arg(dem)
@@ -328,12 +351,12 @@ f_dem_sim <- function(dem = c("age", "educ", "income")) {
       }
     }
     
-    print(sum(is.na(gss_dem_blk)))
+    # print(sum(is.na(gss_dem_blk)))
     
     gss_dem_blk_by_cty <- gss_dem_blk[, county_to_urb, ]
     msm_dem_blk <- male_dem_blk * gss_dem_blk_by_cty
     
-    print(sum(is.na(msm_dem_blk)))
+    # print(sum(is.na(msm_dem_blk)))
     
     pred_msm_county <- apply(msm_dem_blk, MARGIN = c(2, 3), FUN = sum)
     pred_msm_county_expanded <- array(rep(pred_msm_county, each = n_dem),
@@ -342,7 +365,8 @@ f_dem_sim <- function(dem = c("age", "educ", "income")) {
     prop_msm_blk <- msm_dem_blk / pred_msm_county_expanded
     msm_blk_expanded <- array(rep(msm_blk, each = n_dem), dim = c(n_dem, nC, m))
     
-    print(sum(prop_msm_blk[,1,1], na.rm=TRUE))
+    # print(sum(prop_msm_blk[,1,1]))
+    # print(sum(prop_msm_blk > 1, na.rm = TRUE))
     
     adj_msm_dem_blk <- prop_msm_blk * msm_blk_expanded
     
@@ -354,141 +378,26 @@ f_dem_sim <- function(dem = c("age", "educ", "income")) {
     
     outfile <- file.path("msm_draws", paste0("adj_msm_", dem, "_blk_", chunk_id, ".parquet"))
     arrow::write_parquet(adj_df, outfile)
-    
+
     rm(msm_blk, male_blk, male_dem_blk,
        gss_dem_blk, gss_dem_blk_by_cty,
        msm_dem_blk, pred_msm_county, pred_msm_county_expanded,
        prop_msm_blk, msm_blk_expanded, adj_msm_dem_blk,
        adj_df)
+
     gc()
   }
 }
-
-f_dem_sim('educ')
-
-
-# msm_blk_filepath  <- file.path("msm_draws",  paste0("msm_blk_", chunk_id, ".parquet"))
-# msm_blk      <- as.matrix(arrow::read_parquet(msm_blk_filepath))
-# male_dem_filepath <- file.path("male_draws", paste0("adj_male_", 'educ', "_blk", chunk_id, ".parquet"))
-# male_dem_blk <- as.matrix(arrow::read_parquet(male_dem_filepath))
-# 
-# gss_dem_blk <- array(NA_real_, dim = c(n_dem, n_urb, m))
-# for (d in seq_len(n_dem)) {
-#   for (u in seq_len(n_urb)) {
-#     row <- params[params[[dem_var]] == levels[d] &
-#                     params$Urbanicity == urb_levels[u], ]
-#     gss_dem_blk[d, u, ] <- sim_logitnormal_vec(row$msm, row$se, m)
-#   }
-# }
-# 
-#     gss_dem_blk <- array(NA_real_, dim = c(n_dem, n_urb, m))
-#     for (d in seq_len(n_dem)) {
-#       for (u in seq_len(n_urb)) {
-#         params_gss_dem[params_gss_dem$Category == dem_var & 
-#                  params_gss_dem$factor_lev == levels[d] & 
-#                  params_gss_dem$Urbanicity == urb_levels[u], ]
-#         gss_dem_blk[d, u, ] <- sim_logitnormal_vec(row$msm, row$se, m)
-#       }
-#     }
-#     
-#     for (d in seq_len(n_dem)) {
-#       for (u in seq_len(n_urb)) {
-#         params_gss_dem[params_gss_dem$Category == dem_var & 
-#                          params_gss_dem$factor_lev == levels[d] & 
-#                          params_gss_dem$Urbanicity == urb_levels[u], ]
-#         gss_dem_blk[d, u, ] <- sim_logitnormal_vec(row$msm, row$se, m)
-#       }
-#     }
-
-print(sum(prop_msm_blk[,1,1], na.rm=TRUE))
-
-prop_msm_blk[,1,1]
 ```
 
+# Run demographic-specific MSM simulations
 ```{r}
-# Make this into a function where you can specify which demographic you're interested in (e.g., age, education, income)
-
-# dem: one of "age", "education", "income"
-# --- [1] Simulate male population by age group per county (normal)
-for (j in seq(1L, n_sim, by = n_chunk)) {
-  idx <- j:min(j + n_chunk - 1L, n_sim)
-  m   <- length(idx)
-  chunk_id <- paste0(idx[1], "_", idx[m])
-  message("Processing age-specific MSM draws: ", chunk_id)
-  
-  msm_blk_filepath <- file.path("msm_draws", paste0("msm_blk_", chunk_id, ".parquet"))
-  male_blk_filepath <- file.path("male_draws", paste0("male_blk_", chunk_id, ".parquet"))
-  male_age_blk_filepath <- file.path("male_draws", paste0("adj_male_age_blk", chunk_id, ".parquet"))
-  
-  msm_blk <- as.matrix(arrow::read_parquet(msm_blk_filepath))
-  male_blk <- as.matrix(arrow::read_parquet(male_blk_filepath))
-  male_age_blk <- as.matrix(arrow::read_parquet(male_age_blk_filepath))
-  
-  male_age_blk <- array(male_age_blk[, "male_pop"], 
-                        dim = c(n_age, nC, m))
-  
-  # print(sum(is.na(male_age_blk)))
-  
-  # --- Get GSS base rates for each age group × urbanicity
-  gss_age_blk <- array(NA_real_, dim = c(n_age, n_urb, m))
-  
-  for (a in seq_len(n_age)) {
-    for (u in seq_len(n_urb)) {
-      row <- params_gss_age[params_gss_age$agecat == ages[a] &
-                              params_gss_age$Urbanicity == urb_levels[u],]
-      gss_age_blk[a, u, ] <- sim_logitnormal_vec(row$msm, row$se, m)
-    }
-  }
-  
-  print(sum(is.na(gss_age_blk)))
-  
-  gss_age_blk_by_cty <- gss_age_blk[, county_to_urb, ]  # shape: age x county x sim
-  
-  # --- Calculate age-specific MSM block
-  msm_age_blk <- male_age_blk * gss_age_blk_by_cty  # shape: age x county x sim
-  
-  # --- Sum over ages to get total MSM per county (same as Step 1 in figure)
-  pred_msm_county <- apply(msm_age_blk, MARGIN = c(2, 3), FUN = sum)
-  
-  # --- Expand to divide each age-specific MSM estimate by total
-  pred_msm_county_expanded <- array(
-    rep(pred_msm_county, each = n_age),  # repeat each value 5 times
-    dim = c(n_age, nC, m)
-  )
-  # Now divide element-wise
-  prop_msm_blk <- msm_age_blk / pred_msm_county_expanded # 5 x nC x n_sim
-  
-  print(sum(prop_msm_blk[,1,1]))
-  
-  msm_blk_expanded <- array(rep(msm_blk, each = n_age),
-                            dim = c(n_age, nC, m))
-  
-  print(msm_blk_expanded[,1,1])
-  adj_msm_age_blk  <- prop_msm_blk * msm_blk_expanded  # <- total MSM from previous step
-  
-  print(adj_msm_age_blk[,1,1])
-  
-  adj_df <- as.data.frame.table(adj_msm_age_blk, responseName = "msm_count")
-  colnames(adj_df) <- c("age_group", "county_index", "sim_index", "msm_count")
-  
-  adj_df$age_group     <- as.integer(adj_df$age_group)
-  adj_df$county_index  <- as.integer(adj_df$county_index)
-  adj_df$sim_index     <- as.integer(adj_df$sim_index)
-  
-  outfile <- file.path("msm_draws", paste0("adj_msm_age_blk_", chunk_id, ".parquet"))
-  arrow::write_parquet(adj_df, outfile)
-  
-  rm(
-    msm_blk, male_blk, male_age_blk,
-    gss_age_blk, gss_age_blk_by_cty,
-    msm_age_blk, pred_msm_county, pred_msm_county_expanded,
-    prop_msm_blk, msm_blk_expanded, adj_msm_age_blk,
-    adj_df
-  )
-  gc()
-}
-
+f_dem_sim("age")
+f_dem_sim("educ")
+f_dem_sim("income")
 ```
+
+
 
 
 

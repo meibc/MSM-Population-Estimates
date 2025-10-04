@@ -3,7 +3,7 @@ title: "EEE Sept 2025 Male Pop Estimates Final - Data Cleaning"
 output: html_document
 date: "2025-09-24"
 ---
-
+# Load libraries
 ```{r}
 # ---- 1. Load libraries ----
 library(tidyverse)
@@ -13,6 +13,7 @@ library(survey)
 library(stringr)
 library(haven)
 ```
+
 # Set file path
 ```{r}
 basepath <- "/Users/meibinchen/Library/CloudStorage/OneDrive-JohnsHopkins/EEE HIV Stigma/EEE Data/Other"
@@ -36,6 +37,7 @@ nchscodes <- nchscodes %>%
   dplyr::select(CTYNAME, Urbanicity, ST_ABBREV, GEOID)
 
 ```
+
 # Distribution of Males 18+ by Demographic Group by County
 ### Data Cleaning: Age
 ```{r}
@@ -232,7 +234,7 @@ sub_edu_df_clean <- sub_edu_df_clean %>%
     high90 = Count + Stat
   )
 
-
+sub_edu_df_clean
 # Write the formatted table as a csv file
 # write.csv(sub_edu_df_clean, "sub_edu_df_clean.csv", row.names = FALSE)
 ```
@@ -251,6 +253,7 @@ income_cols <- c(
   "B19001_014E", "B19001_015E", "B19001_016E", "B19001_017E"# 100K+
 )
 
+acs_income_df
 sub_income_df <- acs_income_df%>%
   select(GEO_ID, NAME, all_of(income_cols))%>%
   mutate(across(all_of(income_cols),as.numeric))
@@ -300,12 +303,15 @@ sub_income_moe_df <- acs_income_df%>%
 
 # Calculate the MOEs
 sub_income_moe_df <- sub_income_moe_df %>%
+  rowwise() %>%
   mutate(
     income_under_20k = sqrt(sum(c_across(c(B19001_002M, B19001_003M, B19001_004M))^2, na.rm = TRUE)),
-    income_20k_40k = sqrt(sum(c_across(c(B19001_005M, B19001_006M, B19001_007M, B19001_008M))^2, na.rm = TRUE)),
-    income_40k_90k = sqrt(sum(c_across(c(B19001_009M, B19001_010M, B19001_011M, B19001_012M, B19001_013M))^2, na.rm = TRUE)),
+    income_20k_40k   = sqrt(sum(c_across(c(B19001_005M, B19001_006M, B19001_007M, B19001_008M))^2, na.rm = TRUE)),
+    income_40k_90k   = sqrt(sum(c_across(c(B19001_009M, B19001_010M, B19001_011M, B19001_012M, B19001_013M))^2, na.rm = TRUE)),
     income_above_90k = sqrt(sum(c_across(c(B19001_014M, B19001_015M, B19001_016M, B19001_017M))^2, na.rm = TRUE))
-  )
+  ) %>%
+  ungroup()
+
 sub_income_moe_df <- sub_income_moe_df[-c(1), ]
 
 sub_income_moe_df <- sub_income_moe_df %>%
@@ -330,9 +336,12 @@ sub_income_moe_df <- sub_income_moe_df %>%
   mutate(ST_ABBREV = state.abb[match(State, state.name)]) %>%
   select(County, ST_ABBREV, Income, MOE)
 
+sub_income_moe_df
+
 # Write the formatted table as a csv file
 # write.csv(sub_income_df_clean, "sub_income_df_clean.csv", row.names = FALSE)
 ```
+
 # Create overall params demographics dataframe
 ```{r}
 params_age_acs <- params_age_acs %>% 
@@ -392,7 +401,6 @@ params_acs_dem <- params_age_acs %>%
   mutate(moe_se = ifelse(is.na(moe_se), 1e-6, moe_se)) 
   
 ```
-
 
 # Distributions of Male 18+, Male-Male SSH, Female-Female SSH, SSH, Total Households by County
 ```{r}
