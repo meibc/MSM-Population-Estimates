@@ -1,0 +1,185 @@
+---
+title: "MSM Pop Estimates"
+output: html_document
+date: "2025-10-04"
+---
+# Load libraries
+```{r}
+library(tidycensus)
+library(arrow)
+library(survey)
+library(stringr)
+library(dplyr)
+library(tidyverse)
+```
+# Load data
+```{r}
+load('pop_est_params.RData')
+```
+
+# Set up parameters
+```{r}
+nC <- length(nchscodes$GEOID)
+countyid = 1:nC
+county = nchscodes$GEOID[countyid]
+county_to_stateurb  <- params$state_urb_id[countyid]
+county_urb_code     <- nchscodes$Urbanicity[countyid]
+county_to_urb <- params$Urbanicity[countyid]
+county_to_urb <- as.integer(factor(county_to_urb, levels = c("Large.Central", "Large.Fringe", "Medium.Small", "Nonmetro.Rural")))
+
+county_to_urb[is.na(county_to_urb)] <- 1  # fallback to valid index
+params$county_to_urb <- county_to_urb
+
+n_age <- params_acs_dem %>% 
+  filter(Category == "Age") %>% 
+  pull(factor_lev) %>% 
+  n_distinct()
+n_educ <- params_acs_dem %>% 
+  filter(Category == "Education") %>% 
+  pull(factor_lev) %>% 
+  n_distinct()
+n_income <- params_acs_dem %>%
+  filter(Category == "Income") %>% 
+  pull(factor_lev) %>% 
+  n_distinct()
+n_urb <- length(unique(params_gss_dem$Urbanicity))
+ages <- params_acs_dem %>% 
+  filter(Category == "Age") %>% 
+  pull(factor_lev) %>% 
+  unique()
+educs <- params_acs_dem %>% 
+  filter(Category == "Education") %>% 
+  pull(factor_lev) %>% 
+  unique()
+incomes <- params_acs_dem %>% 
+  filter(Category == "Income") %>% 
+  pull(factor_lev) %>% 
+  unique()
+
+urb_levels <- c("Large.Central", "Large.Fringe", "Medium.Small", "Nonmetro.Rural")
+
+params_county <- params %>% 
+  filter(GEOID %in% county)
+
+# Precompute GSS base rate once per county (simulated later)
+gss_p  <- params_gss$msm[county_to_urb]
+gss_se <- params_gss$se[county_to_urb]
+
+# Lookup table for demographic configs
+dem_config <- list(
+  age = list(
+    n       = n_age,
+    levels  = ages,
+    params  = params_gss_dem %>% filter(Category == "agecat"),
+    varname = "agecat"
+  ),
+  educ = list(
+    n       = n_educ,
+    levels  = educs,     # not educ_levels
+    params  = params_gss_dem %>% filter(Category == "educat"),
+    varname = "educat"
+  ),
+  income = list(
+    n       = n_income,
+    levels  = incomes,   # not income_levels
+    params  = params_gss_dem %>% filter(Category == "inccat"),
+    varname = "inccat"
+  )
+)
+```
+
+# MSM calculations
+```{r}
+# calculate SSM households: MM/(MM + FF) @ State-Urbanicity * SS = SSM
+msm_county <- data.frame(GEOID = county, State = nchscodes$ST_ABBREV)
+msm_county$ssm_hh <- params$ss_est * (params$mm_est / (params$mm_est + params$ff_est))
+msm_county$total_hh <- params$total_households_est
+msm_county$county_to_urb <- county_to_urb
+
+# imputation process using urbanicity-specific SSM rate
+msm_county <- msm_county %>%
+  group_by(county_to_urb) %>%
+  mutate(urb_ssm_rate = sum(ssm_hh, na.rm = TRUE) / sum(total_hh, na.rm = TRUE)) %>%
+  ungroup()
+
+msm_county <- msm_county %>% 
+  mutate(ssm_hh = ifelse(is.na(ssm_hh), 0, ssm_hh)) %>%
+  mutate(ssm_hh = ssm_hh + (urb_ssm_rate * total_hh))
+
+# calculate MSM population
+msm_county <- msm_county %>% 
+  group_by(county_to_urb) %>%
+  mutate(urb_ssm_rate = sum(ssm_hh, na.rm = TRUE) / sum(total_hh, na.rm = TRUE)) %>%
+  ungroup() %>% 
+  mutate(per_ssm = ssm_hh / total_hh) %>%
+  mutate(msm_index = per_ssm / urb_ssm_rate) %>% 
+  mutate(msm_urb = params_gss$msm[county_to_urb]) %>% 
+  mutate(male_pop = params$male_18_plus_est) %>% 
+  mutate(msm_pop = round(msm_urb * male_pop * msm_index, 2))
+
+# calculate MSM population at state-level
+msm_state <- msm_county %>% 
+  group_by(State) %>% 
+  summarise(state_msm_pop = sum(msm_pop, na.rm = TRUE)) %>% 
+  arrange(desc(state_msm_pop)) 
+```
+
+# MSM - demographic breakdown 
+```{r}
+msm_dem_county <- data.frame(GEOID = county, State = nchscodes$ST_ABBREV, msm_county = msm_county$msm_pop, Urbanicity = county_urb_code, male_pop = params$male_18_plus_est)
+
+# age breakdown
+age_urb <- params_gss_dem %>% 
+  filter(Category=='agecat') %>%
+  dplyr::select(Urbanicity, factor_lev, msm) %>%
+  pivot_wider(names_from = factor_lev, values_from = msm) 
+
+msm_age <- msm_dem_county %>%
+  left_join(age_urb, by = c("Urbanicity" = "Urbanicity")) %>% 
+  mutate('18-24' = male_pop * `18-24`,
+         '25-34' = male_pop * `25-34`,
+         '35-44' = male_pop * `35-44`,
+         '45-54'   = male_pop * `45-54`, 
+         '55+' = male_pop * `55+`) %>% 
+  mutate(msm_sum = rowSums(across(`18-24`:`55+`), na.rm = TRUE)) %>% 
+  mutate(across(`18-24`:`55+`, ~ .x / msm_sum, .names = "per_{col}")) %>%
+  mutate(across(starts_with("per_"), ~ .x * msm_county, .names = "msm_est_{col}")) %>%
+  mutate(across(starts_with("msm_est"),  ~ .x / male_pop, .names = "rate_{col}")) %>%
+  dplyr::select(GEOID, State, starts_with("msm_est_"), starts_with("rate"), msm_county) 
+
+# education breakdown
+educ_urb <- params_gss_dem %>% 
+  filter(Category=='educat') %>%
+  dplyr::select(Urbanicity, factor_lev, msm) %>%
+  pivot_wider(names_from = factor_lev, values_from = msm)
+
+msm_educ <- msm_dem_county %>%
+  left_join(educ_urb, by = c("Urbanicity" = "Urbanicity")) %>% 
+  mutate(College = male_pop * College, 
+         Graduate = male_pop * Graduate, 
+         `HS/GED` = male_pop * `HS/GED`, 
+         `Less HS` = male_pop * `Less HS`) %>% 
+  mutate(msm_sum = rowSums(across(College:`Less HS`), na.rm = TRUE)) %>%
+  mutate(across(College:`Less HS`, ~ .x / msm_sum, .names = "per_{col}")) %>%
+  mutate(across(starts_with("per_"), ~ .x * msm_county, .names = "msm_est_{col}")) %>%
+  mutate(across(starts_with("msm_est"),  ~ .x / male_pop, .names = "rate_{col}")) %>%
+  dplyr::select(GEOID, State, starts_with("msm_est_"), starts_with("rate"), msm_county) 
+
+# income breakdown
+income_urb <- params_gss_dem %>% 
+  filter(Category=='inccat') %>%
+  dplyr::select(Urbanicity, factor_lev, msm) %>%
+  pivot_wider(names_from = factor_lev, values_from = msm)
+  
+msm_income <-msm_dem_county %>%
+  left_join(income_urb, by = c("Urbanicity" = "Urbanicity")) %>%
+  mutate(less_20k = male_pop * `<20K`,
+         `20k_40k` = male_pop * `[20K, 40K)`,
+         `40K, 90K` = male_pop * `[40K, 90K)`,
+         `90K, infty` = male_pop * `[90K, infty)`) %>% 
+  mutate(msm_sum = rowSums(across(less_20k:`90K, infty`), na.rm = TRUE)) %>%
+  mutate(across(less_20k:`90K, infty`, ~ .x / msm_sum, .names = "per_{col}")) %>%
+  mutate(across(starts_with("per_"), ~ .x * msm_county, .names = "msm_est_{col}")) %>%
+  mutate(across(starts_with("msm_est"),  ~ .x / male_pop, .names = "rate_{col}")) %>%
+  dplyr::select(GEOID, State, starts_with("msm_est_"), starts_with("rate"), msm_county) 
+```

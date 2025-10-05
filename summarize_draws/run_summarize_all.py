@@ -57,14 +57,12 @@ for demo in demographics:
     results_q, results_sums, male_sums = summarize_demo_by_state(msm_paths, male_paths, demo, state_geoid, unique_states)
     # Summary: msm counts 
     demo_quantile_summary = pd.concat(results_q, ignore_index=True)
-    demo_quantile_summary.rename(columns={"<lambda_0>": "q025", "<lambda_1>": "q975"}, inplace=True)
-    demo_quantile_summary['summary_stat'] = np.tile(['mean', 'median', 'q025', 'q975'], reps=len(unique_states))
 
     # Summary: msm rates
     demo_rate_summary = summarize_demo_rates(results_sums, male_sums, unique_states, demo)
 
-    # summary.to_csv(f"outputs/msm_rate_state_{demo}_summary.csv", index=False)
+    # demo_quantile_summary.to_csv(f"outputs/msm_state_{demo}_summary.csv", index=False)
+    # demo_rate_summary.to_csv(f"outputs/msm_rate_state_{demo}_summary.csv", index=False)
 
-
-
+    
 
