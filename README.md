@@ -24,7 +24,7 @@ We estimate MSM counts using an extension of methods described in the following 
   *Open Forum Infectious Diseases.* 2018; 5(6): ofy124.  
   [https://academic.oup.com/ofid/article/5/6/ofy124/5021651](https://academic.oup.com/ofid/article/5/6/ofy124/5021651)
 
-The specific extensions and modifications to this method will be detailed in **[To be Linked]**.
+The details of our methodology is found here: 📄 [View MSM Estimation PDF](eee_msm_methodology.pdf) 
 
 ## Repository Structure
 <pre lang="markdown"><code>## Repository Structure
