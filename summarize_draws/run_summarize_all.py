@@ -43,31 +43,31 @@ state_rate_summary["state"] = unique_states
 
 print('finished calculating state rate summary')
 # # Save
-# state_summary.to_csv("outputs/msm_state_summary.csv", index=False)
-# state_rate_summary.to_csv("outputs/msm_rate_state_summary.csv", index=False)
+state_summary.to_csv("msm_state_summary.csv", index=False)
+state_rate_summary.to_csv("msm_rate_state_summary.csv", index=False)
 
 # With demographics
 # demographics = ["age", "income", "educ", "race", "ethn"]
 demographics = ["ethn"]
 
-for demo in demographics: 
-    print('starting demo:', demo)
-    msm_paths = sorted(glob(f"{msm_dir}/adj_msm_{demo}_blk_*.parquet"))
-    male_paths = sorted(glob(f"{male_dir}/adj_male_{demo}_blk*.parquet"))
+# for demo in demographics: 
+#     print('starting demo:', demo)
+#     msm_paths = sorted(glob(f"{msm_dir}/adj_msm_{demo}_blk_*.parquet"))
+#     male_paths = sorted(glob(f"{male_dir}/adj_male_{demo}_blk*.parquet"))
 
-    # County-level: rate and count summaries
-    summary, rate_summary = summarize_demo_by_county_chunked(msm_paths, male_paths, demo)
-    summary.to_csv(f"msm_county_{demo}_summary.csv", index=False)
-    rate_summary.to_csv(f"msm_rate_county_{demo}_summary.csv", index=False)
-    print(f'finished county-level summary for {demo}')
-    # State-level 
-    # State-level: msm counts and male counts 
-    # results_q, results_sums, male_sums = summarize_demo_by_state(msm_paths, male_paths, demo, state_geoid, unique_states)
-    # # Summary: msm counts 
-    # demo_quantile_summary = pd.concat(results_q, ignore_index=True)
+#     # County-level: rate and count summaries
+#     summary, rate_summary = summarize_demo_by_county_chunked(msm_paths, male_paths, demo)
+#     summary.to_csv(f"msm_county_{demo}_summary.csv", index=False)
+#     rate_summary.to_csv(f"msm_rate_county_{demo}_summary.csv", index=False)
+#     print(f'finished county-level summary for {demo}')
+#     # State-level 
+#     # State-level: msm counts and male counts 
+#     # results_q, results_sums, male_sums = summarize_demo_by_state(msm_paths, male_paths, demo, state_geoid, unique_states)
+#     # # Summary: msm counts 
+#     # demo_quantile_summary = pd.concat(results_q, ignore_index=True)
 
-    # # Summary: msm rates
-    # demo_rate_summary = summarize_demo_rates(results_sums, male_sums, unique_states, demo)
+#     # # Summary: msm rates
+#     # demo_rate_summary = summarize_demo_rates(results_sums, male_sums, unique_states, demo)
 
-    # demo_quantile_summary.to_csv(f"msm_state_{demo}_summary.csv", index=False)
-    # demo_rate_summary.to_csv(f"msm_rate_state_{demo}_summary.csv", index=False)
+#     # demo_quantile_summary.to_csv(f"msm_state_{demo}_summary.csv", index=False)
+#     # demo_rate_summary.to_csv(f"msm_rate_state_{demo}_summary.csv", index=False)
