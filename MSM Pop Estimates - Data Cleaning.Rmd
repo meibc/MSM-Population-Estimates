@@ -523,6 +523,7 @@ params <- params %>%
 ```{r}
 gss <- read_dta("/Users/meibinchen/Library/CloudStorage/OneDrive-JohnsHopkins/EEE HIV Stigma/EEE Data/Other/GSS Data/gss7224_r1.dta")
 
+
 # Filter and clean GSS survey data
 gss_prepared <- gss %>% 
   mutate(wtssnrps = as.numeric(wtssnrps)) %>%
@@ -550,10 +551,15 @@ gss_prepared <- gss %>%
       TRUE ~ NA_character_
     ),
     racecat = case_when(
-      hispanic %in% c(2,3,4,5) ~ 'hisp',
-      hispanic == 1 & race == 1 ~ 'white', 
-      hispanic == 1 & race == 2 ~ 'black', 
-      hispanic == 1 & race == 3 ~ 'other'
+      race == 1 ~ 'white', 
+      race == 2 ~ 'black', 
+      race == 3 ~ 'other',
+      TRUE ~ NA_character_
+    ),
+    ethncat = case_when(
+      hispanic %in% c(2,3,4,5) ~ "hisp",
+      hispanic == 1 ~ "nonhisp",
+      TRUE ~ NA_character_
     ),
     educat = case_when(
       degree == 0 ~ 'less_HS',
@@ -571,7 +577,7 @@ gss_prepared <- gss %>%
     sex == 1 & sexsex5 %in% c(1,2) ~ 1,
     sex == 1 & sexsex5 %in% c(3) ~ 0,
     TRUE ~ NA_real_
-  )) %>%  
+  ))%>%  
   filter(!is.na(vpsu), !is.na(vstrat), sex == 1, year %in% c(2010, 2012, 2016, 2018, 2020, 2021, 2022, 2024)) 
   # filter(!is.na(vpsu), !is.na(vstrat), sex == 1) 
 
@@ -601,6 +607,16 @@ params_gss_age <- svyby(
 params_gss_race <- svyby(
   ~msm,
   ~racecat + Urbanicity,
+  gss_design,
+  svymean,
+  vartype = c("se", "ci"),
+  na.rm = TRUE
+)
+
+# Proportion MSM by Ethnicity and Urbanicity
+params_gss_ethn <- svyby(
+  ~msm,
+  ~ethncat + Urbanicity,
   gss_design,
   svymean,
   vartype = c("se", "ci"),
@@ -668,10 +684,35 @@ params_gss_income <- params_gss_income %>%
   mutate(Category = 'inccat') %>%
   rename(factor_lev = incomecat)
 
+params_gss_race <- params_gss_race %>% 
+  mutate(Category = 'racecat') %>%
+  rename(factor_lev = racecat)
+
+params_gss_race <- params_gss_race %>% 
+  mutate(across(everything(), ~ replace(., . == 0, 1e-6))) %>% 
+  as.data.frame()
+
+params_gss_ethn <- params_gss_ethn %>% 
+  mutate(Category = 'ethncat') %>%
+  rename(factor_lev = ethncat)
+
+params_gss_ethn <- params_gss_ethn %>% 
+  mutate(across(everything(), ~ replace(., . == 0, 1e-6))) %>% 
+  as.data.frame()
+
+# bind everything together
 params_gss_dem <- params_gss_age %>%
   bind_rows(params_gss_educ) %>%
-  bind_rows(params_gss_income) 
+  bind_rows(params_gss_income)%>%
+  bind_rows(params_gss_race)%>%
+  bind_rows(params_gss_ethn)
 
+#manually set two zero values in params_gss_dem
+params_gss_dem <- params_gss_dem %>%
+  mutate(msm = ifelse(factor_lev == "black" & Urbanicity == "Nonmetro.Rural", 0.007534475, msm),
+         msm = ifelse(factor_lev == "hisp" & Urbanicity == "Nonmetro.Rural", 0.00188556, msm))
+
+params_gss
 ```
 
 # Store to read in R

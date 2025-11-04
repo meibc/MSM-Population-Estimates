@@ -27,6 +27,7 @@ def summarize_demo_by_county_chunked(msm_paths, male_paths, demo, n_counties=314
     for start in range(1, n_counties + 1, chunk_size):
         end = min(start + chunk_size - 1, n_counties)
         county_range_set = set(range(start, end + 1))
+        print(f"Processing counties {start} to {end} for demo '{demo}'")
 
         with ThreadPoolExecutor(max_workers=8) as executor:
             dfs = list(executor.map(lambda p: safe_read_parquet(p, [demo, "county_index", "sim_index", "msm_count"]), msm_paths))
