@@ -13,7 +13,7 @@ st.write("Files in Current Directory:", os.listdir())
 
 @st.cache_data
 def load_data():
-    file_path = "summarize_draws/outputs/MSM - aggregated.xlsx"
+    file_path = "summarize_draws/streamlit/MSM - aggregated.xlsx"
     return pd.read_excel(file_path)
 
 @st.cache_data
