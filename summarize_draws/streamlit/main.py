@@ -7,6 +7,9 @@ import numpy as np
 # ----------------------
 # Load data and geojson
 # ----------------------
+import os
+st.write("Current Working Directory:", os.getcwd())
+st.write("Files in Current Directory:", os.listdir())
 
 @st.cache_data
 def load_data():
