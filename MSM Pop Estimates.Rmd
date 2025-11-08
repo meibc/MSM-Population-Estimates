@@ -117,6 +117,7 @@ dem_config <- list(
     varname = "ethncat"  
   )
 )
+
 ```
 
 # MSM calculations
@@ -132,7 +133,6 @@ msm_county <- msm_county %>%
   group_by(county_to_urb) %>%
   mutate(urb_ssm_rate = sum(ssm_hh, na.rm = TRUE) / sum(total_hh, na.rm = TRUE)) %>%
   ungroup()
-
 
 msm_county <- msm_county %>% 
   mutate(ssm_hh = ifelse(is.na(ssm_hh), 0, ssm_hh)) %>%
@@ -174,10 +174,11 @@ dem_county_config <- function(dem_cat, dem_lab) {
     filter(Category == dem_cat) %>%
     dplyr::select(Urbanicity, factor_lev, msm) %>%
     rename(msm_rate = msm)
-  
-  msm_dem <- params_acs_dem %>%
+
+    msm_dem <- params_acs_dem %>%
     filter(Category== dem_lab) %>%
     left_join(dem_urb, by = c("Urbanicity", "factor_lev")) %>%
+    left_join(msm_county %>% select(GEOID, male_pop), by = "GEOID") %>%
     mutate(msm_est = msm_rate * male_pop) %>% 
     group_by(GEOID, ST_ABBREV) %>%
     mutate(
@@ -225,6 +226,7 @@ msm_dem_all <- rbind(msm_age, msm_educ, msm_income, msm_race, msm_ethn) %>%
   mutate(value = round(value, 4)) %>%
   select(GEOID, ST_ABBREV, msm_pop_county, male_pop, value, type, demographic, Category)
 
+msm_dem_all
 # gives final county-level MSM demographic estimates (count, percent, rate)
 # write_csv(msm_dem_all, 'msm_pop_demographics.csv')
 ```

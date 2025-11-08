@@ -403,6 +403,8 @@ for (j in seq(1L, n_sim, by = n_chunk)) {
           sd   = params_county$mm_se),
     nrow = nC, ncol = m
   )
+  
+  mm_block[is.na(mm_block)] <- 0
 
   ff_block <- matrix(
     rnorm(n = nC * m,
@@ -410,13 +412,18 @@ for (j in seq(1L, n_sim, by = n_chunk)) {
           sd   = params_county$ff_se),
     nrow = nC, ncol = m
   )
+  
+  ff_block[is.na(ff_block)] <- 0
 
-  mm_block[mm_block < 0] <- 0
-  ff_block[ff_block < 0] <- 0
+  mm_block[mm_block < 0] <- 1e-6
+  ff_block[ff_block < 0] <- 1e-6
+  denom <- mm_block + ff_block
+  denom[denom == 0] <- 1e-6
 
-  m_f_ratio <- mm_block / (mm_block + ff_block)
+  m_f_ratio <- mm_block / denom
   ssm_block <- m_f_ratio * ss_block
 
+  print(sum(is.na(ssm_block)))
   hh_block <- matrix(
     params_county$total_households_est,
     nrow = nC, ncol = m, byrow = FALSE
@@ -519,7 +526,7 @@ f_dem_sim <- function(dem = c("age", "educ", "income", "race", "ethn")) {
     gss_dem_blk_by_cty <- gss_dem_blk[, county_to_urb, ]
     msm_dem_blk <- male_dem_blk * gss_dem_blk_by_cty
     
-    # print(sum(is.na(msm_dem_blk)))
+    print(sum(is.na(msm_dem_blk)))
     
     pred_msm_county <- apply(msm_dem_blk, MARGIN = c(2, 3), FUN = sum)
     pred_msm_county_expanded <- array(rep(pred_msm_county, each = n_dem),
@@ -528,8 +535,8 @@ f_dem_sim <- function(dem = c("age", "educ", "income", "race", "ethn")) {
     prop_msm_blk <- msm_dem_blk / pred_msm_county_expanded
     msm_blk_expanded <- array(rep(msm_blk, each = n_dem), dim = c(n_dem, nC, m))
     
-    # print(sum(prop_msm_blk[,1,1]))
-    # print(sum(prop_msm_blk > 1, na.rm = TRUE))
+    print(sum(prop_msm_blk[,1,1]))
+    print(sum(prop_msm_blk > 1, na.rm = TRUE))
     
     adj_msm_dem_blk <- prop_msm_blk * msm_blk_expanded
     
