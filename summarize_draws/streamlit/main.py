@@ -10,7 +10,7 @@ import numpy as np
 
 @st.cache_data
 def load_data():
-    file_path = "/Users/meibinchen/Documents/GitHub/MSM-Population-Estimates/outputs/MSM - aggregated.xlsx"
+    file_path = "MSM - aggregated.xlsx"
     return pd.read_excel(file_path)
 
 @st.cache_data
