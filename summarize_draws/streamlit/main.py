@@ -137,6 +137,7 @@ AGE_MAP   = {1: "18–24", 2: "25–34", 3: "35–44", 4: "45–54", 5: "55+"}
 INCOME_MAP= {1: "< $20k", 2: "$20k–$40k", 3: "$40k–$90k", 4: "$90k+"}
 EDUC_MAP  = {1: "College", 2: "Graduate", 3: "HS/GED", 4: "Less HS"}
 RACE_MAP  = {1: "Black", 2: "Other", 3: "White"}
+ETHNIC_MAP= {1: "Hispanic", 2: "Non-Hispanic"}
 
 # ----------------------
 # Sidebar
