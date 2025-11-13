@@ -10,8 +10,9 @@ import os
 # ----------------------
 @st.cache_data
 def load_data():
+    st.write(os.getcwd())
     # Adjusted to your repo structure on Streamlit Cloud
-    file_path = "/summarize_draws/MSM - aggregated.xlsx"
+    file_path = "/Users/meibinchen/Documents/GitHub/MSM-Population-Estimates/summarize_draws/MSM - aggregated.xlsx"
     return pd.read_excel(file_path)
 
 @st.cache_data
@@ -20,8 +21,7 @@ def load_geojson():
     url = "https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json"
     return requests.get(url).json()
 
-st.set_page_config(layout="wide")
-
+st.set_page_config
 # ----------------------
 # Helpers
 # ----------------------
