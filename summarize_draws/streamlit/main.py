@@ -186,6 +186,10 @@ elif demo_var == "race":
     filtered_df["Demographic Level"] = filtered_df["Demographic Level"].replace(RACE_MAP)
     levels = filtered_df["Demographic Level"].unique().tolist()
     selection = st.sidebar.multiselect("Select Race Categories", levels, default=levels)
+elif demo_var == "ethn":
+    filtered_df["Demographic Level"] = filtered_df["Demographic Level"].replace(ETHNIC_MAP)
+    levels = filtered_df["Demographic Level"].unique().tolist()
+    selection = st.sidebar.multiselect("Select Ethnicity Categories", levels, default=levels)
 
 if selection:
     filtered_df = filtered_df[filtered_df["Demographic Level"].isin(selection)]
