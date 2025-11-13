@@ -6,12 +6,12 @@ date: "2025-09-24"
 # Load libraries
 ```{r}
 # ---- 1. Load libraries ----
-library(tidyverse)
-library(tidycensus)
 library(arrow)
 library(survey)
 library(stringr)
 library(haven)
+library(tidyverse)
+library(tidycensus)
 ```
 
 # Set file path
@@ -142,6 +142,7 @@ params_age_acs <- sub_age_df[-c(1,2),] %>%
 # for missing values 
 params_age_acs <- params_age_acs %>%
   mutate(moe_se = ifelse(is.na(moe_se), 1e-6, moe_se))
+
 ```
 
 ### Data Cleaning: Education
@@ -440,12 +441,10 @@ male_total_data <- male_total_data %>%
     names_pattern = "(estimate|moe)_(hisp|nonhisp)"
   )
 
-
 cols <- c("estimate", "moe")
 sub_ethn_df_clean <-male_total_data %>%
   mutate(across(all_of(cols),as.numeric),
          moe_se = moe / 1.645)
-
 
 sub_ethn_df_clean <- sub_ethn_df_clean %>%
   separate(NAME, into = c("County", "State"), sep = ", ", remove = FALSE) %>%
@@ -458,29 +457,34 @@ sub_ethn_df_clean <- sub_ethn_df_clean %>%
 params_age_acs <- params_age_acs %>% 
   rename(factor_lev = age_group) %>% 
   mutate(Category = "Age") %>%
-  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV"))
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>% 
+  arrange(GEOID, Category, factor_lev)
 
 params_edu_acs <- sub_edu_df_clean %>% 
   select(County, ST_ABBREV, Education, Count, MOE) %>% 
   mutate(Category = "Education", moe_se = MOE / 1.645) %>% 
   rename(est = Count, factor_lev = Education) %>%
-  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV"))
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>% 
+  arrange(GEOID, Category, factor_lev)
 
 params_income_acs <- sub_income_df_clean %>%
   left_join(sub_income_moe_df, by = c("County", "ST_ABBREV", "Income")) %>%
   rename(factor_lev = Income, est = Count) %>% 
   mutate(Category = "Income", moe_se = MOE / 1.645) %>%
-  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) 
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>% 
+  arrange(GEOID, Category, factor_lev)
 
 params_race_acs <- sub_race_df_clean %>%
   rename(factor_lev = race, est = estimate) %>%
   mutate(Category = "Race") %>%
-  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV"))  
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>% 
+  arrange(GEOID, Category, factor_lev)
 
 params_ethn_acs <- sub_ethn_df_clean %>%
   rename(factor_lev = ethnicity, est = estimate) %>%
   mutate(Category = "Ethnicity") %>%
-  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV"))  
+  left_join(nchscodes, by = c("County" = "CTYNAME", "ST_ABBREV" = "ST_ABBREV")) %>% 
+  arrange(GEOID, Category, factor_lev)
 
 params_acs_dem <- params_age_acs %>% 
   bind_rows(params_edu_acs) %>%
@@ -523,6 +527,9 @@ params_acs_dem <- params_age_acs %>%
 
 params_acs_dem <- params_acs_dem %>%
   select(-State, -MOE, -moe)
+
+params_acs_dem <- params_acs_dem %>% 
+  arrange(GEOID, Category, factor_lev)
 ```
 
 # Distributions of Male 18+, Male-Male SSH, Female-Female SSH, SSH, Total Households by County
@@ -640,6 +647,7 @@ nchscodes <- nchscodes %>%
 # make sure that params only include relevant GEOIDs
 params <- params %>% 
   filter(GEOID %in% nchscodes$GEOID)
+
 ```
 
 ```{r}
@@ -834,9 +842,116 @@ params_gss_dem <- params_gss_dem %>%
   mutate(msm = ifelse(factor_lev == "black" & Urbanicity == "Nonmetro.Rural", 0.007534475, msm),
          msm = ifelse(factor_lev == "hisp" & Urbanicity == "Nonmetro.Rural", 0.00188556, msm))
 
+params_gss_dem <- params_gss_dem %>% 
+  arrange(Category, Urbanicity, factor_lev)
+```
+
+# Parameters - simulation
+```{r}
+nC <- length(nchscodes$GEOID)
+
+countyid = 1:nC
+county = nchscodes$GEOID[countyid]
+county_to_stateurb  <- params$state_urb_id[countyid]
+county_urb_code     <- nchscodes$Urbanicity[countyid]
+county_to_urb <- params$Urbanicity[countyid]
+county_to_urb <- as.integer(factor(county_to_urb, levels = c("Large.Central", "Large.Fringe", "Medium.Small", "Nonmetro.Rural")))
+
+county_to_urb[is.na(county_to_urb)] <- 1  # fallback to valid index
+
+n_age <- params_acs_dem %>% 
+  filter(Category == "Age") %>% 
+  pull(factor_lev) %>% 
+  n_distinct()
+n_educ <- params_acs_dem %>% 
+  filter(Category == "Education") %>% 
+  pull(factor_lev) %>% 
+  n_distinct()
+n_income <- params_acs_dem %>%
+  filter(Category == "Income") %>% 
+  pull(factor_lev) %>% 
+  n_distinct()
+n_race <- params_acs_dem %>% 
+  filter(Category == "Race") %>% 
+  pull(factor_lev) %>% 
+  n_distinct()
+n_ethn <- params_acs_dem %>%
+  filter(Category == "Ethnicity") %>% 
+  pull(factor_lev) %>%
+  n_distinct()
+n_urb <- length(unique(params_gss_dem$Urbanicity))
+ages <- params_acs_dem %>% 
+  filter(Category == "Age") %>% 
+  pull(factor_lev) %>% 
+  unique()
+educs <- params_acs_dem %>% 
+  filter(Category == "Education") %>% 
+  pull(factor_lev) %>% 
+  unique()
+incomes <- params_acs_dem %>% 
+  filter(Category == "Income") %>% 
+  pull(factor_lev) %>% 
+  unique()
+races <- params_acs_dem %>% 
+  filter(Category == "Race") %>% 
+  pull(factor_lev) %>% 
+  unique()
+ethn <- params_acs_dem %>% 
+  filter(Category == "Ethnicity") %>% 
+  pull(factor_lev) %>% 
+  unique()
+
+urb_levels <- c("Large.Central", "Large.Fringe", "Medium.Small", "Nonmetro.Rural")
+
+params_county <- params %>% 
+  filter(GEOID %in% county)
+
+# Precompute GSS base rate once per county (simulated later)
+gss_p  <- params_gss$msm[county_to_urb]
+gss_se <- params_gss$se[county_to_urb]
+
+# Lookup table for demographic configs
+# Lookup table for demographic configs
+dem_config <- list(
+  age = list(
+    n       = n_age,
+    levels  = ages,
+    params  = params_gss_dem %>% filter(Category == "agecat"),
+    varname = "agecat"
+  ),
+  educ = list(
+    n       = n_educ,
+    levels  = educs,     # not educ_levels
+    params  = params_gss_dem %>% filter(Category == "educat"),
+    varname = "educat"
+  ),
+  income = list(
+    n       = n_income,
+    levels  = incomes,   # not income_levels
+    params  = params_gss_dem %>% filter(Category == "inccat"),
+    varname = "inccat"
+  ),
+  race = list(
+    n = n_race,
+    levels = races,
+    params = params_gss_dem %>% filter(Category == "racecat"),
+    varname = "racecat"
+  ),
+  ethn = list(
+    n = n_ethn,
+    levels = ethn,
+    params = params_gss_dem %>% filter(Category == "ethncat"),
+    varname = "ethncat"  
+  )
+)
 ```
 
 # Store to read in R
 ```{r}
-save(nchscodes, params_gss, params_gss_dem, params, nchscodes, params_acs_dem, file = "pop_est_params.RData")
+save(nchscodes, params_gss, params_gss_dem, params, nchscodes, params_acs_dem, 
+     nC, countyid, county, county_to_stateurb, county_urb_code, county_to_urb,
+     n_age, n_educ, n_income, n_race, n_ethn, n_urb, 
+     ages, educs, incomes, races, ethn, urb_levels,
+     gss_p, gss_se, dem_config,
+     file = "pop_est_params.RData")
 ```
