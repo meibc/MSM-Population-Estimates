@@ -12,7 +12,7 @@ import os
 def load_data():
     st.write(os.getcwd())
     # Adjusted to your repo structure on Streamlit Cloud
-    file_path = "/summarize_draws/MSM - aggregated.xlsx"
+    file_path = "summarize_draws/MSM - aggregated.xlsx"
     return pd.read_excel(file_path)
 
 @st.cache_data
